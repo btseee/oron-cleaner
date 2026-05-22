@@ -7,7 +7,7 @@ import requests
 from datasets import Audio, Dataset, DatasetDict, Features, Value
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import OUTPUT_DIR, SAMPLE_RATE
+from ..constants import OUTPUT_DIR, OUTPUT_SAMPLE_RATE, SAMPLE_RATE
 from ..processor import process_split
 from ..stats import CleaningStats
 
@@ -26,7 +26,7 @@ _EXTRA_FIELDS = [
 _FEATURES = Features({
     "client_id":        Value("string"),
     "path":             Value("string"),
-    "audio":            Audio(sampling_rate=SAMPLE_RATE),
+    "audio":            Audio(sampling_rate=OUTPUT_SAMPLE_RATE),
     "sentence":         Value("string"),
     "up_votes":         Value("int32"),
     "down_votes":       Value("int32"),

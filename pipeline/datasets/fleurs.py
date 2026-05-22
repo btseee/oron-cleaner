@@ -3,7 +3,7 @@ import logging
 from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import SAMPLE_RATE
+from ..constants import OUTPUT_SAMPLE_RATE, SAMPLE_RATE
 from ..processor import process_split
 from ..stats import CleaningStats
 
@@ -18,7 +18,7 @@ _FEATURES = Features({
     "id":                Value("int32"),
     "num_samples":       Value("int32"),
     "path":              Value("string"),
-    "audio":             Audio(sampling_rate=SAMPLE_RATE),
+    "audio":             Audio(sampling_rate=OUTPUT_SAMPLE_RATE),
     "raw_transcription": Value("string"),
     "transcription":     Value("string"),
     "gender":            Value("int32"),

@@ -8,7 +8,7 @@ Stages:
   4. Pitch & clarity       (CREPE F0)
   5. AI MOS score          (DNSMOS P.835)
   6. Full-sentence reading (Whisper large-v3 + CER)
-  7. Loudness normalisation (ITU-R BS.1770-4, applied only to passing clips)
+  7. Output preparation    (resample to 24 kHz, peak-normalise)
 """
 
 import logging
@@ -19,7 +19,6 @@ import jiwer
 import torchcrepe
 import librosa
 import numpy as np
-import pyloudnorm as pyln
 import torch
 import torchaudio
 import whisper
@@ -35,11 +34,11 @@ from .constants import (
     MIN_DURATION_S,
     MAX_DURATION_S,
     MIN_LEN_RATIO,
+    OUTPUT_SAMPLE_RATE,
     PITCH_MIN_CONF,
     PITCH_MIN_HZ,
     SAMPLE_RATE,
     SNR_MIN_DB,
-    TARGET_LUFS,
     VAD_MIN_SPEECH_RATIO,
 )
 
@@ -66,7 +65,6 @@ class AudioQualityFilter:
             fs=SAMPLE_RATE, personalized=False
         ).to(device)
 
-        self._meter = pyln.Meter(SAMPLE_RATE)
         log.info("All models loaded.")
 
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
@@ -256,17 +254,14 @@ class AudioQualityFilter:
 
         return True, cer_val, len_ratio, asr_text, ""
 
-    # ── Stage 7 ── Loudness normalisation (applied only to passing clips) ──
+    # ── Stage 7 ── Output preparation (resample to 24 kHz + peak-normalise) ──
 
-    def _normalise_loudness(self, audio: np.ndarray) -> np.ndarray:
-        try:
-            loudness = self._meter.integrated_loudness(audio)
-            if np.isinf(loudness) or loudness < -70:
-                return audio
-            normalised = pyln.normalize.loudness(audio, loudness, TARGET_LUFS)
-            return np.clip(normalised, -1.0, 1.0).astype(np.float32)
-        except Exception:
-            return audio
+    def _prepare_output_audio(self, audio: np.ndarray) -> np.ndarray:
+        resampled = librosa.resample(audio, orig_sr=SAMPLE_RATE, target_sr=OUTPUT_SAMPLE_RATE)
+        peak = float(np.abs(resampled).max())
+        if peak < 1e-8:
+            return resampled.astype(np.float32)
+        return np.clip(resampled / (peak + 1e-7), -1.0, 1.0).astype(np.float32)
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -345,6 +340,6 @@ class AudioQualityFilter:
             cer=cer_val,
             asr_transcript=asr_text,
             duration_s=result.duration_s,
-            audio_normalized=self._normalise_loudness(trimmed),
+            audio_normalized=self._prepare_output_audio(trimmed),
             **dnsmos,
         )

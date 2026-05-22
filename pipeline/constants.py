@@ -1,12 +1,13 @@
 from pathlib import Path
 
 SAMPLE_RATE: int = 16_000
+OUTPUT_SAMPLE_RATE: int = 24_000
 
 OUTPUT_DIR: Path = Path("output")
 
 # Duration gates (seconds)
 MIN_DURATION_S: float = 1.0
-MAX_DURATION_S: float = 15.0
+MAX_DURATION_S: float = 30.0
 
 # VAD
 VAD_MIN_SPEECH_RATIO: float = 0.60
@@ -27,5 +28,3 @@ DNSMOS_MIN_BAK: float = 2.5
 MAX_CER: float = 0.25
 MIN_LEN_RATIO: float = 0.60
 
-# Loudness normalisation target (ITU-R BS.1770-4)
-TARGET_LUFS: float = -23.0

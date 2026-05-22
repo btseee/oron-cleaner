@@ -3,14 +3,15 @@ import logging
 from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import SAMPLE_RATE
+from ..constants import OUTPUT_SAMPLE_RATE, SAMPLE_RATE
 from ..processor import process_split
 from ..stats import CleaningStats
 
 log = logging.getLogger(__name__)
 
 _FEATURES = Features({
-    "audio":                    Audio(sampling_rate=SAMPLE_RATE),
+    "audio":                    Audio(sampling_rate=OUTPUT_SAMPLE_RATE),
+    "sentence":                 Value("string"),
     "human_transcript":         Value("string"),
     "original_asr_transcript":  Value("string"),
     "original_cer":             Value("float32"),
@@ -120,4 +121,5 @@ def _promote_ws_fields(rec: dict) -> dict:
     out["dnsmos_bak"]   = out.pop("_ws_dnsmos_bak",  0.0)
     out["dnsmos_ovr"]   = out.pop("_ws_dnsmos_ovr",  0.0)
     out["dnsmos_p808"]  = out.pop("_ws_dnsmos_p808", 0.0)
+    out["sentence"] = out.get("human_transcript", "")
     return out

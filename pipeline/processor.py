@@ -21,7 +21,7 @@ from .checkpoint import (
     save_batch,
 )
 from .clip_result import ClipResult
-from .constants import OUTPUT_DIR
+from .constants import OUTPUT_DIR, OUTPUT_SAMPLE_RATE
 from .stats import CleaningStats, RejectionLog
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def _build_record(
     field_renames: dict[str, str] | None,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
-        "audio": {"array": result.audio_normalized, "sampling_rate": 16_000},
+        "audio": {"array": result.audio_normalized, "sampling_rate": OUTPUT_SAMPLE_RATE},
         "snr_db":           float(result.snr_db),
         "mean_f0_hz":       float(result.mean_f0_hz),
         "pitch_confidence": float(result.pitch_confidence),
