@@ -9,8 +9,6 @@ Responsibilities:
   - Return the full list of passing records and per-split stats
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Any

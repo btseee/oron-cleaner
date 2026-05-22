@@ -11,8 +11,6 @@ Stages:
   7. Loudness normalisation (ITU-R BS.1770-4, applied only to passing clips)
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import unicodedata

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 
 from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset

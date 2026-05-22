@@ -12,13 +12,12 @@ Usage:
   python clean_pipeline.py --hf-token <TOKEN> --device cpu --no-resume
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import warnings
+from pathlib import Path
 
-warnings.quality_filtererwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -62,7 +61,7 @@ def main() -> None:
     selected = resolve_datasets(args.datasets)
     log.info("Datasets to process: %s", selected)
 
-    from pipeline.audio_quality_filterer import AudioQualityFilter
+    from pipeline.audio_filter import AudioQualityFilter
     from pipeline.datasets.common_voice import process_common_voice
     from pipeline.datasets.fleurs import process_fleurs
     from pipeline.datasets.worldspeech import process_worldspeech
@@ -74,21 +73,21 @@ def main() -> None:
         log.info("=" * 60)
         log.info("Common Voice 25 Mongolian")
         ds, stats = process_common_voice(quality_filter, resume=args.resume)
-        stats.save(path=__import__("pathlib").Path("cleaning_report_cv.txt"))
+        stats.save(path=Path("cleaning_report_cv.txt"))
         upload_dataset("cv", ds, stats)
 
     if "fleurs" in selected:
         log.info("=" * 60)
         log.info("FLEURS Mongolian")
         ds, stats = process_fleurs(quality_filter, resume=args.resume)
-        stats.save(path=__import__("pathlib").Path("cleaning_report_fleurs.txt"))
+        stats.save(path=Path("cleaning_report_fleurs.txt"))
         upload_dataset("fleurs", ds, stats)
 
     if "ws" in selected:
         log.info("=" * 60)
         log.info("WorldSpeech Mongolian")
         ds, stats = process_worldspeech(quality_filter, resume=args.resume)
-        stats.save(path=__import__("pathlib").Path("cleaning_report_ws.txt"))
+        stats.save(path=Path("cleaning_report_ws.txt"))
         upload_dataset("ws", ds, stats)
 
     log.info("All done.")
