@@ -5,9 +5,6 @@ license: cc-by-4.0
 task_categories:
 - automatic-speech-recognition
 - audio-classification
-task_ids:
-- automatic-speech-recognition
-- language-identification
 pretty_name: "FLEURS — Mongolian (Clean)"
 tags:
 - mongolian

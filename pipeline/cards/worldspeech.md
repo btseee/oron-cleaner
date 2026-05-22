@@ -4,8 +4,6 @@ language:
 license: cc-by-nc-4.0
 task_categories:
 - automatic-speech-recognition
-task_ids:
-- automatic-speech-recognition
 pretty_name: "WorldSpeech — Mongolian (Clean)"
 tags:
 - mongolian
