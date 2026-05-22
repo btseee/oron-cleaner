@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oron-cleaner"
+version = "1.0.0"
+description = "Studio-quality Mongolian speech dataset cleaning & HuggingFace upload pipeline"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Battseren Badral", email = "Battseren.Badral@octasys.de" }]
+keywords = ["mongolian", "speech", "asr", "tts", "audio", "dataset", "cleaning"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+requires-python = ">=3.14"
+dependencies = [
+    "torch>=2.6.0",
+    "torchaudio>=2.6.0",
+    "torchmetrics[audio]>=1.9.0",
+    "torchcrepe>=0.0.24",
+    "openai-whisper>=20250625",
+    "silero-vad>=6.2.1",
+    "librosa>=0.11.0",
+    "soundfile>=0.13.1",
+    "pyloudnorm>=0.2.0",
+    "datasets[audio]>=4.8.5",
+    "huggingface_hub>=1.16.1",
+    "jiwer>=4.0.0",
+    "numpy>=2.0.0",
+]
+
+[project.scripts]
+oron-cleaner = "clean_pipeline:main"
+
+[project.urls]
+Homepage = "https://github.com/BBadral/oron-cleaner"
+Repository = "https://github.com/BBadral/oron-cleaner"
+Issues = "https://github.com/BBadral/oron-cleaner/issues"
+Changelog = "https://github.com/BBadral/oron-cleaner/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipeline"]
+
+# ── Ruff (linter + formatter) ────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline"]
+
+# ── Mypy (type checker) ──────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.14"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+# ── Pytest ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
