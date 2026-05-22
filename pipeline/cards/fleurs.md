@@ -4,29 +4,17 @@ language:
 license: cc-by-4.0
 task_categories:
 - automatic-speech-recognition
-- audio-classification
 pretty_name: "FLEURS — Mongolian (Clean)"
 tags:
 - mongolian
 - speech
 - audio
 - fleurs
-- few-shot
-- studio-quality
-configs:
-- config_name: mn_mn
-  data_files:
-    - split: train
-      path: data/train-*
-    - split: validation
-      path: data/validation-*
-    - split: test
-      path: data/test-*
 ---
 
-# FLEURS — Mongolian (Studio-Quality Cleaned)
+# FLEURS — Mongolian (Quality-Filtered)
 
-A quality-filtered version of the [FLEURS](https://huggingface.co/datasets/google/fleurs) (`mn_mn`) Mongolian benchmark dataset.
+A quality-filtered version of the [FLEURS](https://huggingface.co/datasets/google/fleurs) (`mn_mn`) Mongolian benchmark dataset, cleaned for use with [oron-tts](https://github.com/btseee/oron-tts) (F5-TTS / Flow Matching).
 
 ## Source
 
@@ -34,10 +22,19 @@ Derived from `google/fleurs` config `mn_mn`. FLEURS is the speech version of the
 
 ## Cleaning Pipeline
 
-Same 6-stage pipeline as `btsee/common-voices-25-mn` (see above).
-Ground truth for sentence verification: `raw_transcription` field.
+6-stage automated quality filter, thresholds calibrated for Mongolian TTS training (low-resource language; DeepFilterNet denoising applied downstream in oron-tts):
 
-All passing clips were loudness-normalized to **−23 LUFS**.
+| Stage | Method | Threshold |
+|---|---|---|
+| 1. Format normalization | librosa | mono · 16 kHz |
+| 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
+| 3. SNR filter | RMS-based SNR | ≥8 dB |
+| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
+
+Ground truth for sentence verification: `raw_transcription` field.
+All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 

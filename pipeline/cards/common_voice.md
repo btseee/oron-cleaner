@@ -11,21 +11,11 @@ tags:
 - audio
 - asr
 - common-voice
-- studio-quality
-configs:
-- config_name: default
-  data_files:
-    - split: train
-      path: data/train-*
-    - split: validation
-      path: data/validation-*
-    - split: test
-      path: data/test-*
 ---
 
-# Common Voice 25 — Mongolian (Studio-Quality Cleaned)
+# Common Voice 25 — Mongolian (Quality-Filtered)
 
-This is a **quality-filtered** subset of the [Mozilla Common Voice 25.0 (2026-03-09)](https://commonvoice.mozilla.org/) Mongolian (`mn`) dataset, cleaned for use in high-quality ASR and TTS model training.
+This is a **quality-filtered** subset of the [Mozilla Common Voice 25.0 (2026-03-09)](https://commonvoice.mozilla.org/) Mongolian (`mn`) dataset, cleaned for use with [oron-tts](https://github.com/btseee/oron-tts) (F5-TTS / Flow Matching TTS).
 
 ## Source
 
@@ -34,20 +24,20 @@ Original dataset: 95,905 clips · 130.32 hours · 609 speakers · 6,114 sentence
 
 ## Cleaning Pipeline
 
-Every clip was passed through a 6-stage automated quality filter:
+6-stage automated quality filter, thresholds calibrated for Mongolian TTS training (low-resource language; DeepFilterNet denoising applied downstream in oron-tts):
 
 | Stage | Method | Threshold |
 |---|---|---|
-| 1. Format normalization | ffmpeg · librosa | mono · 16 kHz |
-| 2. Voice activity detection | Silero VAD | ≥60% speech frames |
-| 3. SNR filter | RMS-based SNR | ≥15 dB |
-| 4. Pitch & clarity | CREPE F0 detection | F0 ∈ [70, 400] Hz · confidence ≥0.55 |
-| 5. AI quality score | DNSMOS P.835 | OVR ≥2.8 · SIG ≥3.0 · BAK ≥2.5 |
-| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.25 · length ratio ≥0.60 |
+| 1. Format normalization | librosa | mono · 16 kHz |
+| 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
+| 3. SNR filter | RMS-based SNR | ≥8 dB |
+| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
 
-Stage 6 confirms that the speaker **actually read the full sentence** — not a truncated or mumbled version. Clips where the ASR transcript had >25% character error rate against the ground-truth sentence, or where the ASR output was less than 60% the length of the target sentence, were rejected.
+Stage 6 confirms that the speaker **actually read the full sentence**. Clips where the ASR transcript had >35 % character error rate against the ground-truth sentence, or where the ASR output was less than 40 % the length of the target sentence, were rejected.
 
-All passing clips were loudness-normalized to **−23 LUFS** (ITU-R BS.1770-4).
+All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 

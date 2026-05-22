@@ -10,17 +10,11 @@ tags:
 - speech
 - audio
 - parliament
-- studio-quality
-configs:
-- config_name: mn_mn
-  data_files:
-    - split: train
-      path: data/train-*
 ---
 
-# WorldSpeech — Mongolian (Studio-Quality Cleaned)
+# WorldSpeech — Mongolian (Quality-Filtered)
 
-A quality-filtered version of the Mongolian (`mn_mn`) subset of [WorldSpeech](https://huggingface.co/datasets/disco-eth/WorldSpeech) — a multilingual corpus of 65k+ hours from parliaments, public broadcasters, and audiobooks.
+A quality-filtered version of the Mongolian (`mn_mn`) subset of [WorldSpeech](https://huggingface.co/datasets/disco-eth/WorldSpeech), cleaned for use with [oron-tts](https://github.com/btseee/oron-tts) (F5-TTS / Flow Matching TTS).
 
 ## Source
 
@@ -29,11 +23,21 @@ Source: Mongolian Parliament sessions (public record) + Latter-day Saints addres
 
 ## Cleaning Pipeline
 
-Same 6-stage pipeline as the other datasets in this series.
-Ground truth: `human_transcript` field.
-Pre-filter: clips with original `snr < 10 dB` skipped before processing.
+6-stage automated quality filter, thresholds calibrated for Mongolian TTS training (low-resource language; DeepFilterNet denoising applied downstream in oron-tts). Same thresholds as `btsee/common-voices-25-mn` and `btsee/fleurs-mn`:
 
-All passing clips loudness-normalized to **−23 LUFS**.
+| Stage | Method | Threshold |
+|---|---|---|
+| 1. Format normalization | librosa | mono · 16 kHz |
+| 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
+| 3. SNR filter | RMS-based SNR | ≥8 dB |
+| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
+
+Ground truth: `human_transcript` field.
+Pre-filter: clips with original `snr < 8 dB` skipped before processing.
+
+All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 
