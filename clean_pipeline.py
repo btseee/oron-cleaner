@@ -2,7 +2,7 @@
 Mongolian speech dataset cleaning & HuggingFace upload pipeline.
 
 Targets:
-  btsee/common-voices-25-mn  ← mozilla-foundation/common_voice_17_0 (mn)
+  btsee/common-voices-25-mn  ← Mozilla Data Collective API (Common Voice 25 mn)
   btsee/fleurs-mn            ← google/fleurs (mn_mn)
   btsee/worldspeech-mn       ← disco-eth/WorldSpeech (mn_mn)
 
@@ -10,12 +10,28 @@ Usage:
   python clean_pipeline.py --hf-token <TOKEN>
   python clean_pipeline.py --hf-token <TOKEN> --datasets cv,fleurs
   python clean_pipeline.py --hf-token <TOKEN> --device cpu --no-resume
+
+API keys are loaded from .env automatically (API_KEY, HF_TOKEN).
 """
 
 import argparse
 import logging
+import os
 import warnings
 from pathlib import Path
+
+# Load .env before anything else so os.environ is populated for defaults
+def _load_dotenv() -> None:
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+_load_dotenv()
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
@@ -30,6 +46,8 @@ log = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--hf-token", required=True, help="HuggingFace write token")
+    p.add_argument("--cv-api-key", default=os.environ.get("API_KEY", ""),
+                   help="Mozilla Data Collective API key (or set API_KEY in .env)")
     p.add_argument("--datasets", default="all", help="Comma-separated: all | cv | fleurs | ws")
     p.add_argument("--device", default="", help="cuda or cpu (auto-detected if omitted)")
     p.add_argument("--resume", dest="resume", action="store_true", default=True)
@@ -76,7 +94,9 @@ def main() -> None:
     if "cv" in selected:
         log.info("=" * 60)
         log.info("Common Voice 25 Mongolian")
-        ds, stats = process_common_voice(quality_filter, resume=args.resume)
+        if not args.cv_api_key:
+            raise SystemExit("--cv-api-key is required for the cv dataset (or set API_KEY in .env)")
+        ds, stats = process_common_voice(quality_filter, api_key=args.cv_api_key, resume=args.resume)
         stats.save(path=OUTPUT_DIR / "cleaning_report_cv.txt")
         upload_dataset("cv", ds, stats)
 

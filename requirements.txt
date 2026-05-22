@@ -15,6 +15,7 @@ soundfile>=0.13.1
 pyloudnorm>=0.2.0
 
 # Dataset & HuggingFace
+requests>=2.32.0
 datasets[audio]>=4.8.5
 huggingface_hub>=1.16.1
 
