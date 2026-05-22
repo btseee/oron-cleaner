@@ -17,7 +17,6 @@ API keys are loaded from .env automatically (API_KEY, HF_TOKEN).
 import argparse
 import logging
 import os
-import warnings
 from pathlib import Path
 
 # Load .env before anything else so os.environ is populated for defaults
@@ -33,8 +32,6 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",

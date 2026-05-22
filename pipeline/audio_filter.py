@@ -21,6 +21,7 @@ import librosa
 import numpy as np
 import pyloudnorm as pyln
 import torch
+import torchaudio
 import whisper
 from silero_vad import load_silero_vad, get_speech_timestamps
 from torchmetrics.audio.dnsmos import DeepNoiseSuppressionMeanOpinionScore
@@ -91,7 +92,11 @@ class AudioQualityFilter:
                 if sr != SAMPLE_RATE:
                     arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
             else:
-                arr, _ = librosa.load(str(audio_input), sr=SAMPLE_RATE, mono=True)
+                # File path — torchaudio handles MP3/WAV/FLAC without audioread
+                waveform, sr = torchaudio.load(str(audio_input))
+                arr = waveform.mean(0).numpy()
+                if sr != SAMPLE_RATE:
+                    arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
             return arr.astype(np.float32), ""
         except Exception as exc:
             return None, str(exc)
