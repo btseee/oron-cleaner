@@ -27,6 +27,7 @@ dependencies = [
     "torchcrepe>=0.0.24",
     "openai-whisper>=20250625",
     "silero-vad>=6.2.1",
+    "torchcodec>=0.3.0",
     "librosa>=0.11.0",
     "soundfile>=0.13.1",
     "pyloudnorm>=0.2.0",

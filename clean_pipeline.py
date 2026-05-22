@@ -18,6 +18,7 @@ import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -66,6 +67,9 @@ def main() -> None:
     from pipeline.datasets.fleurs import process_fleurs
     from pipeline.datasets.worldspeech import process_worldspeech
     from pipeline.upload import upload_dataset
+    from pipeline.constants import OUTPUT_DIR
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     quality_filter = AudioQualityFilter(device=device)
 
@@ -73,21 +77,21 @@ def main() -> None:
         log.info("=" * 60)
         log.info("Common Voice 25 Mongolian")
         ds, stats = process_common_voice(quality_filter, resume=args.resume)
-        stats.save(path=Path("cleaning_report_cv.txt"))
+        stats.save(path=OUTPUT_DIR / "cleaning_report_cv.txt")
         upload_dataset("cv", ds, stats)
 
     if "fleurs" in selected:
         log.info("=" * 60)
         log.info("FLEURS Mongolian")
         ds, stats = process_fleurs(quality_filter, resume=args.resume)
-        stats.save(path=Path("cleaning_report_fleurs.txt"))
+        stats.save(path=OUTPUT_DIR / "cleaning_report_fleurs.txt")
         upload_dataset("fleurs", ds, stats)
 
     if "ws" in selected:
         log.info("=" * 60)
         log.info("WorldSpeech Mongolian")
         ds, stats = process_worldspeech(quality_filter, resume=args.resume)
-        stats.save(path=Path("cleaning_report_ws.txt"))
+        stats.save(path=OUTPUT_DIR / "cleaning_report_ws.txt")
         upload_dataset("ws", ds, stats)
 
     log.info("All done.")

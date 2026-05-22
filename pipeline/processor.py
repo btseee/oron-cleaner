@@ -21,6 +21,7 @@ from .checkpoint import (
     save_batch,
 )
 from .clip_result import ClipResult
+from .constants import OUTPUT_DIR
 from .stats import CleaningStats, RejectionLog
 
 log = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def process_split(
     )
 
     stats = CleaningStats(f"{dataset_name}/{split_name}")
-    reject_log = RejectionLog(Path("logs") / f"rejected_{ckpt_name}.csv")
+    reject_log = RejectionLog(OUTPUT_DIR / "logs" / f"rejected_{ckpt_name}.csv")
 
     passing, prior_stats = load_prior_batches(ckpt_name, last_ckpt)
     stats.merge(prior_stats)
@@ -66,7 +67,6 @@ def process_split(
 
     for idx in range(skip_until, len(split_dataset)):
         item = split_dataset[idx]
-        stats.total += 1
 
         clip_id = str(item.get("path") or item.get("id") or idx)
         ground_truth = item.get(text_field, "")

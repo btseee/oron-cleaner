@@ -3,6 +3,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
+from .constants import OUTPUT_DIR
 from .stats import CleaningStats
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ _REPO_CONFIG: dict[str, tuple[str, Path, str]] = {
 
 
 def upload_dataset(key: str, cleaned_ds, stats: CleaningStats) -> None:
+    if not cleaned_ds:
+        log.warning("No clean clips for %s — skipping upload.", key)
+        return
+
     repo_id, card_path, commit_msg = _REPO_CONFIG[key]
     api = HfApi()
 
@@ -49,7 +54,7 @@ def upload_dataset(key: str, cleaned_ds, stats: CleaningStats) -> None:
 
     report_text = stats.report()
     report_filename = f"cleaning_report_{key}.txt"
-    Path(report_filename).write_text(report_text, encoding="utf-8")
+    (OUTPUT_DIR / report_filename).write_text(report_text, encoding="utf-8")
     api.upload_file(
         path_or_fileobj=report_text.encode("utf-8"),
         path_in_repo=report_filename,

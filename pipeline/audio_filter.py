@@ -72,18 +72,24 @@ class AudioQualityFilter:
 
     def _load_audio(self, audio_input) -> tuple[np.ndarray | None, str]:
         """
-        Accept a HuggingFace Audio dict (keys: array, sampling_rate)
+        Accept a HuggingFace Audio dict, a torchcodec AudioDecoder object,
         or a file path (str / Path).
         Returns (float32 array at SAMPLE_RATE, error_message).
         """
         try:
             if isinstance(audio_input, dict):
                 arr = np.array(audio_input["array"], dtype=np.float32)
-                sr = audio_input["sampling_rate"]
-                if sr != SAMPLE_RATE:
-                    arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
+                sr = int(audio_input["sampling_rate"])
                 if arr.ndim > 1:
                     arr = arr.mean(axis=0)
+                if sr != SAMPLE_RATE:
+                    arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
+            elif hasattr(audio_input, "get_all_samples"):
+                samples = audio_input.get_all_samples()
+                arr = samples.data.float().mean(0).cpu().numpy()
+                sr = int(samples.sample_rate)
+                if sr != SAMPLE_RATE:
+                    arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
             else:
                 arr, _ = librosa.load(str(audio_input), sr=SAMPLE_RATE, mono=True)
             return arr.astype(np.float32), ""

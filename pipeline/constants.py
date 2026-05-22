@@ -1,4 +1,8 @@
+from pathlib import Path
+
 SAMPLE_RATE: int = 16_000
+
+OUTPUT_DIR: Path = Path("output")
 
 # Duration gates (seconds)
 MIN_DURATION_S: float = 1.0

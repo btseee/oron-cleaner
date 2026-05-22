@@ -208,9 +208,9 @@ After each run the pipeline writes locally:
 
 | File | Content |
 | --- | --- |
-| `cleaning_report_{cv,fleurs,ws}.txt` | Per-stage rejection counts and pass-rate summary |
-| `logs/rejected_{dataset}_{split}.csv` | Per-clip rejection log (clip\_id, stage, reason, ground\_truth) |
-| `checkpoints/` | Pickle snapshots for resume |
+| `output/cleaning_report_{cv,fleurs,ws}.txt` | Per-stage rejection counts and pass-rate summary |
+| `output/logs/rejected_{dataset}_{split}.csv` | Per-clip rejection log (clip\_id, stage, reason, ground\_truth) |
+| `output/checkpoints/` | Pickle snapshots for resume |
 
 ---
 

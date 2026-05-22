@@ -3,13 +3,14 @@ import logging
 import pickle
 from pathlib import Path
 
+from .constants import OUTPUT_DIR
 import torch
 
 from .stats import CleaningStats
 
 log = logging.getLogger(__name__)
 
-_CHECKPOINT_ROOT = Path("checkpoints")
+_CHECKPOINT_ROOT = OUTPUT_DIR / "checkpoints"
 
 
 def checkpoint_dir(name: str, batch_idx: int) -> Path:
