@@ -8,11 +8,12 @@ log = logging.getLogger(__name__)
 
 
 class RejectionLog:
-    """Append-only CSV log of rejected clips. Not thread-safe."""
+    """CSV log of rejected clips. Not thread-safe."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, append: bool = True) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(path, "a", newline="", encoding="utf-8")
+        mode = "a" if append else "w"
+        self._file = open(path, mode, newline="", encoding="utf-8")
         self._writer = csv.writer(self._file)
         if path.stat().st_size == 0:
             self._writer.writerow(["clip_id", "stage", "reason", "ground_truth"])
@@ -70,12 +71,17 @@ class CleaningStats:
             "duration": "Rejected — too short/long:  ",
             "vad":      "Rejected — VAD (no speech): ",
             "snr":      "Rejected — SNR too low:     ",
-            "pitch":    "Rejected — pitch/mumbling:  ",
             "dnsmos":   "Rejected — DNSMOS too low:  ",
             "cer":      "Rejected — sentence verify: ",
+            "crash":    "Rejected — processing crash:",
         }
         for stage, label in stage_labels.items():
             lines.append(f"{label}{self.stage_counts.get(stage, 0):>8,}")
+        other_rejections = sum(
+            count for stage, count in self.stage_counts.items() if stage not in stage_labels
+        )
+        if other_rejections:
+            lines.append(f"Rejected — other:           {other_rejections:>8,}")
         lines.append("─" * 50)
         pct = 100.0 * self.passed / max(self.total, 1)
         hours = self.total_duration_s / 3600.0

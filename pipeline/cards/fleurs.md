@@ -30,12 +30,12 @@ Derived from `google/fleurs` config `mn_mn`. FLEURS is the speech version of the
 | 1. Format normalization | librosa | mono · 16 kHz |
 | 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
 | 3. SNR filter | RMS-based SNR | ≥8 dB |
-| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 4. Pitch metadata | CREPE F0 | recorded when available; not a rejection gate |
 | 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
-| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35, or ≤0.50 when length ratio is 0.75–1.25 |
 
 Ground truth for sentence verification: `raw_transcription` field.
-All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
+Clips are kept between **1–30 seconds** to match oron-tts training limits. All passing clips are peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 
@@ -46,7 +46,7 @@ All original FLEURS fields preserved, plus computed quality metrics:
 | `id` | int32 | Sample ID |
 | `num_samples` | int32 | Number of audio samples |
 | `path` | string | Audio file path |
-| `audio` | Audio(16000) | Decoded audio at 16 kHz |
+| `audio` | Audio(24000) | Cleaned audio resampled to 24 kHz |
 | `raw_transcription` | string | Original (unnormalized) transcription |
 | `transcription` | string | Normalized transcription |
 | `gender` | int32 | Speaker gender class |
@@ -68,7 +68,7 @@ All original FLEURS fields preserved, plus computed quality metrics:
 
 ```python
 from datasets import load_dataset
-ds = load_dataset("btsee/fleurs-mn", "mn_mn")
+ds = load_dataset("btsee/fleurs-mn")
 sample = ds["train"][0]
 ```
 

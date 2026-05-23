@@ -24,16 +24,23 @@ def latest_checkpoint_idx(name: str) -> int:
     p = _CHECKPOINT_ROOT / name
     if not p.exists():
         return -1
-    indices = sorted(
-        int(d.name.split("_")[1]) for d in p.iterdir() if d.is_dir()
-    )
+    indices: list[int] = []
+    for d in p.iterdir():
+        if not d.is_dir() or not d.name.startswith("batch_"):
+            continue
+        try:
+            indices.append(int(d.name.split("_", maxsplit=1)[1]))
+        except ValueError:
+            log.warning("Ignoring malformed checkpoint directory: %s", d)
     return indices[-1] if indices else -1
 
 
-def save_batch(name: str, batch_idx: int, records: list[dict]) -> None:
-    path = checkpoint_dir(name, batch_idx) / "records.pkl"
-    with open(path, "wb") as f:
+def save_batch(name: str, batch_idx: int, records: list[dict], stats: CleaningStats) -> None:
+    batch_dir = checkpoint_dir(name, batch_idx)
+    with open(batch_dir / "records.pkl", "wb") as f:
         pickle.dump(records, f)
+    with open(batch_dir / "stats.pkl", "wb") as f:
+        pickle.dump(stats, f)
 
 
 def load_prior_batches(name: str, last_idx: int) -> tuple[list[dict], CleaningStats]:
@@ -46,19 +53,26 @@ def load_prior_batches(name: str, last_idx: int) -> tuple[list[dict], CleaningSt
     records: list[dict] = []
 
     for batch_idx in range(last_idx + 1):
-        path = checkpoint_dir(name, batch_idx) / "records.pkl"
-        if not path.exists():
+        batch_dir = checkpoint_dir(name, batch_idx)
+        records_path = batch_dir / "records.pkl"
+        if not records_path.exists():
             continue
-        with open(path, "rb") as f:
+        with open(records_path, "rb") as f:
             batch = pickle.load(f)
         records.extend(batch)
-        for rec in batch:
-            stats.passed += 1
-            stats.total += 1
-            stats.total_duration_s += float(rec.get("duration_s") or 0.0)
-            stats.sum_dnsmos_ovr   += float(rec.get("dnsmos_ovr") or 0.0)
-            stats.sum_snr          += float(rec.get("snr_db")     or 0.0)
-            stats.sum_cer          += float(rec.get("cer")        or 0.0)
+
+        stats_path = batch_dir / "stats.pkl"
+        if stats_path.exists():
+            with open(stats_path, "rb") as f:
+                stats.merge(pickle.load(f))
+        else:
+            for rec in batch:
+                stats.passed += 1
+                stats.total += 1
+                stats.total_duration_s += float(rec.get("duration_s") or 0.0)
+                stats.sum_dnsmos_ovr   += float(rec.get("dnsmos_ovr") or 0.0)
+                stats.sum_snr          += float(rec.get("snr_db")     or 0.0)
+                stats.sum_cer          += float(rec.get("cer")        or 0.0)
 
     return records, stats
 

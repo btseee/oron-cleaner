@@ -3,7 +3,7 @@ import logging
 from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import OUTPUT_SAMPLE_RATE, SAMPLE_RATE
+from ..constants import OUTPUT_SAMPLE_RATE, SNR_MIN_DB
 from ..processor import process_split
 from ..stats import CleaningStats
 
@@ -38,6 +38,7 @@ _FEATURES = Features({
     "clean_dnsmos_p808":        Value("float32"),
     "clean_cer":                Value("float32"),
     "clean_asr_transcript":     Value("string"),
+    "clean_duration_s":         Value("float32"),
 })
 
 # Extra fields copied verbatim from each original item.
@@ -96,8 +97,11 @@ def process_worldspeech(
 
 
 def _prefilter_by_snr(split, split_name: str):
-    log.info("  Pre-filtering %s by original SNR < 10 …", split_name)
-    filtered = split.filter(lambda x: (x.get("snr") or 0.0) >= 10.0, desc="snr_prefilter")
+    log.info("  Pre-filtering %s by original SNR < %.1f …", split_name, SNR_MIN_DB)
+    filtered = split.filter(
+        lambda x: (x.get("snr") or 0.0) >= SNR_MIN_DB,
+        desc="snr_prefilter",
+    )
     log.info("  %d clips remain after SNR pre-filter.", len(filtered))
     return filtered
 
@@ -117,6 +121,7 @@ def _promote_ws_fields(rec: dict) -> dict:
     out["clean_dnsmos_p808"]     = out.pop("dnsmos_p808",       0.0)
     out["clean_cer"]             = out.pop("cer",               0.0)
     out["clean_asr_transcript"]  = out.pop("asr_transcript",    "")
+    out["clean_duration_s"]      = out.pop("duration_s",        0.0)
     out["dnsmos_sig"]   = out.pop("_ws_dnsmos_sig",  0.0)
     out["dnsmos_bak"]   = out.pop("_ws_dnsmos_bak",  0.0)
     out["dnsmos_ovr"]   = out.pop("_ws_dnsmos_ovr",  0.0)

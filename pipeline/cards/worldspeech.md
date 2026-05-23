@@ -31,14 +31,14 @@ Source: Mongolian Parliament sessions (public record) + Latter-day Saints addres
 | 1. Format normalization | librosa | mono · 16 kHz |
 | 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
 | 3. SNR filter | RMS-based SNR | ≥8 dB |
-| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 4. Pitch metadata | CREPE F0 | recorded when available; not a rejection gate |
 | 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
-| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35, or ≤0.50 when length ratio is 0.75–1.25 |
 
 Ground truth: `human_transcript` field.
 Pre-filter: clips with original `snr < 8 dB` skipped before processing.
 
-All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
+Clips are kept between **1–30 seconds** to match oron-tts training limits. All passing clips are peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 
@@ -46,7 +46,7 @@ All original WorldSpeech fields preserved. Original `asr_transcript` and `cer` r
 
 | Field | Type | Description |
 |---|---|---|
-| `audio` | Audio(16000) | Decoded audio at 16 kHz |
+| `audio` | Audio(24000) | Cleaned audio resampled to 24 kHz |
 | `human_transcript` | string | Human-verified transcript |
 | `original_asr_transcript` | string | WorldSpeech ASR output |
 | `original_cer` | float32 | WorldSpeech CER |
@@ -73,12 +73,13 @@ All original WorldSpeech fields preserved. Original `asr_transcript` and `cer` r
 | `clean_dnsmos_p808` | float32 | Re-scored DNSMOS P.808 |
 | `clean_cer` | float32 | CER vs. human_transcript |
 | `clean_asr_transcript` | string | Whisper large-v3 output |
+| `clean_duration_s` | float32 | Cleaned clip duration (s) |
 
 ## Usage
 
 ```python
 from datasets import load_dataset
-ds = load_dataset("btsee/worldspeech-mn", "mn_mn")
+ds = load_dataset("btsee/worldspeech-mn")
 sample = ds["train"][0]
 ```
 

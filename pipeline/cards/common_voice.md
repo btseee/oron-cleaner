@@ -32,13 +32,13 @@ Original dataset: 95,905 clips · 130.32 hours · 609 speakers · 6,114 sentence
 | 1. Format normalization | librosa | mono · 16 kHz |
 | 2. Voice activity detection | Silero VAD | ≥25 % speech frames |
 | 3. SNR filter | RMS-based SNR | ≥8 dB |
-| 4. Pitch & clarity | CREPE F0 | F0 ≥50 Hz · confidence ≥0.25 |
+| 4. Pitch metadata | CREPE F0 | recorded when available; not a rejection gate |
 | 5. AI quality score | DNSMOS P.835 | OVR ≥2.2 · SIG ≥2.4 · BAK ≥2.0 |
-| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35 · length ratio ≥0.40 |
+| 6. Full sentence verification | Whisper large-v3 + CER | CER ≤0.35, or ≤0.50 when length ratio is 0.75–1.25 |
 
-Stage 6 confirms that the speaker **actually read the full sentence**. Clips where the ASR transcript had >35 % character error rate against the ground-truth sentence, or where the ASR output was less than 40 % the length of the target sentence, were rejected.
+Stage 6 confirms that the speaker **actually read the full sentence**. CER above 0.35 can still pass only when it is at most 0.50 and the ASR output length stays close to the target sentence, which compensates for Whisper's weaker Mongolian accuracy without accepting truncated clips.
 
-All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
+Clips are kept between **1–30 seconds** to match oron-tts training limits. All passing clips are peak-normalized to −1 dBFS and resampled to **24 kHz**.
 
 ## Schema
 
@@ -46,7 +46,7 @@ All passing clips peak-normalized to −1 dBFS and resampled to **24 kHz**.
 |---|---|---|
 | `client_id` | string | Speaker UUID hash |
 | `path` | string | Original clip filename |
-| `audio` | Audio(16000) | Decoded audio array at 16 kHz |
+| `audio` | Audio(24000) | Cleaned audio resampled to 24 kHz |
 | `sentence` | string | Ground-truth Mongolian sentence |
 | `up_votes` | int32 | Community up-votes |
 | `down_votes` | int32 | Community down-votes |

@@ -5,7 +5,7 @@ Stages:
   1. Format normalisation  (mono, 16 kHz, float32)
   2. Voice activity        (Silero VAD)
   3. SNR                   (RMS-based)
-  4. Pitch & clarity       (CREPE F0)
+    4. Pitch metadata        (CREPE F0)
   5. AI MOS score          (DNSMOS P.835)
   6. Full-sentence reading (Whisper large-v3 + CER)
   7. Output preparation    (resample to 24 kHz, peak-normalise)
@@ -31,12 +31,14 @@ from .constants import (
     DNSMOS_MIN_OVR,
     DNSMOS_MIN_SIG,
     MAX_CER,
+    MAX_RESCUE_CER,
+    MAX_RESCUE_LEN_RATIO,
     MIN_DURATION_S,
     MAX_DURATION_S,
     MIN_LEN_RATIO,
+    MIN_RESCUE_LEN_RATIO,
     OUTPUT_SAMPLE_RATE,
     PITCH_MIN_CONF,
-    PITCH_MIN_HZ,
     SAMPLE_RATE,
     SNR_MIN_DB,
     VAD_MIN_SPEECH_RATIO,
@@ -144,10 +146,10 @@ class AudioQualityFilter:
             return 40.0
         return 20.0 * np.log10(signal / noise_floor + 1e-10)
 
-    # ── Stage 4 ── Pitch & clarity ─────────────────────────────────────────
+    # ── Stage 4 ── Pitch metadata ──────────────────────────────────────────
 
     def _check_pitch(self, audio: np.ndarray) -> tuple[bool, float, float, str]:
-        """Returns (passed, mean_f0, mean_confidence, reject_reason)."""
+        """Returns pitch diagnostics without rejecting otherwise valid speech."""
         try:
             # torchcrepe expects (1, time) float32 tensor
             audio_t = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
@@ -167,22 +169,18 @@ class AudioQualityFilter:
             frequency   = frequency.squeeze(0).cpu().numpy()    # (frames,)
             periodicity = periodicity.squeeze(0).cpu().numpy()  # (frames,) voiced confidence
         except Exception as exc:
-            return False, 0.0, 0.0, f"crepe_error:{exc}"
+            log.warning("CREPE pitch diagnostics failed: %s", exc)
+            return True, 0.0, 0.0, ""
 
-        voiced = periodicity > 0.5
+        voiced = periodicity > PITCH_MIN_CONF
         voiced_freq = frequency[voiced]
         voiced_conf = periodicity[voiced]
 
         if len(voiced_freq) < 10:
-            return False, 0.0, 0.0, "insufficient_voiced_frames"
+            return True, 0.0, 0.0, ""
 
         mean_f0   = float(np.mean(voiced_freq))
         mean_conf = float(np.mean(voiced_conf))
-
-        if mean_f0 < PITCH_MIN_HZ:
-            return False, mean_f0, mean_conf, f"pitch_too_low_{mean_f0:.1f}Hz"
-        if mean_conf < PITCH_MIN_CONF:
-            return False, mean_f0, mean_conf, f"low_conf_mumbling_{mean_conf:.3f}"
 
         return True, mean_f0, mean_conf, ""
 
@@ -247,12 +245,23 @@ class AudioQualityFilter:
 
         len_ratio = len(norm_asr) / max(len(norm_gt), 1)
 
-        if cer_val > MAX_CER:
-            return False, cer_val, len_ratio, asr_text, f"high_cer_{cer_val:.3f}"
-        if len_ratio < MIN_LEN_RATIO:
-            return False, cer_val, len_ratio, asr_text, f"truncated_ratio_{len_ratio:.2f}"
+        passed, reason = self._reading_passes(cer=cer_val, length_ratio=len_ratio)
+        if not passed:
+            return False, cer_val, len_ratio, asr_text, reason
 
         return True, cer_val, len_ratio, asr_text, ""
+
+    @staticmethod
+    def _reading_passes(cer: float, length_ratio: float) -> tuple[bool, str]:
+        if length_ratio < MIN_LEN_RATIO:
+            return False, f"truncated_ratio_{length_ratio:.2f}"
+        if cer <= MAX_CER:
+            return True, ""
+        if cer > MAX_RESCUE_CER:
+            return False, f"high_cer_{cer:.3f}"
+        if not (MIN_RESCUE_LEN_RATIO <= length_ratio <= MAX_RESCUE_LEN_RATIO):
+            return False, f"uncertain_reading_cer_{cer:.3f}_ratio_{length_ratio:.2f}"
+        return True, ""
 
     # ── Stage 7 ── Output preparation (resample to 24 kHz + peak-normalise) ──
 
@@ -261,7 +270,8 @@ class AudioQualityFilter:
         peak = float(np.abs(resampled).max())
         if peak < 1e-8:
             return resampled.astype(np.float32)
-        return np.clip(resampled / (peak + 1e-7), -1.0, 1.0).astype(np.float32)
+        target_peak = 10 ** (-1.0 / 20.0)
+        return np.clip(resampled / (peak + 1e-7) * target_peak, -target_peak, target_peak).astype(np.float32)
 
     # ── Public API ──────────────────────────────────────────────────────────
 

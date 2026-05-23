@@ -21,7 +21,7 @@ from .checkpoint import (
     save_batch,
 )
 from .clip_result import ClipResult
-from .constants import OUTPUT_DIR, OUTPUT_SAMPLE_RATE
+from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR, OUTPUT_SAMPLE_RATE
 from .stats import CleaningStats, RejectionLog
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def process_split(
     field_renames maps original key → destination key for conflict-free copying
     (used by WorldSpeech to avoid overwriting freshly computed metrics).
     """
-    ckpt_name = f"{dataset_name}_{split_name}"
+    ckpt_name = f"{dataset_name}_{split_name}_{FILTER_POLICY_VERSION}"
     last_ckpt = latest_checkpoint_idx(ckpt_name) if resume else -1
     skip_until = (last_ckpt + 1) * batch_size if last_ckpt >= 0 else 0
 
@@ -57,13 +57,17 @@ def process_split(
     )
 
     stats = CleaningStats(f"{dataset_name}/{split_name}")
-    reject_log = RejectionLog(OUTPUT_DIR / "logs" / f"rejected_{ckpt_name}.csv")
+    reject_log = RejectionLog(
+        OUTPUT_DIR / "logs" / f"rejected_{ckpt_name}.csv",
+        append=resume and last_ckpt >= 0,
+    )
 
     passing, prior_stats = load_prior_batches(ckpt_name, last_ckpt)
     stats.merge(prior_stats)
 
     batch_passing: list[dict] = []
     current_batch_idx = last_ckpt + 1
+    batch_stats = CleaningStats(f"{ckpt_name}/batch_{current_batch_idx:06d}")
 
     for idx in range(skip_until, len(split_dataset)):
         item = split_dataset[idx]
@@ -78,6 +82,7 @@ def process_split(
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
         stats.record(result)
+        batch_stats.record(result)
 
         if not result.passed:
             reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
@@ -85,10 +90,11 @@ def process_split(
             batch_passing.append(_build_record(result, item, extra_fields, field_renames))
 
         if (idx + 1) % batch_size == 0 or idx == len(split_dataset) - 1:
-            save_batch(ckpt_name, current_batch_idx, batch_passing)
+            save_batch(ckpt_name, current_batch_idx, batch_passing, batch_stats)
             passing.extend(batch_passing)
             batch_passing = []
             current_batch_idx += 1
+            batch_stats = CleaningStats(f"{ckpt_name}/batch_{current_batch_idx:06d}")
             log.info("  [%d/%d] checkpoint saved — passed so far: %d", idx + 1, len(split_dataset), stats.passed)
             flush_gpu_cache()
 
