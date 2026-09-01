@@ -44,6 +44,70 @@ def _gate_table() -> str:
     return "\n".join(f"| {name} | {value} |" for name, value in rows)
 
 
+# What each source actually grants, and what it demands in return. The merged
+# corpus is governed by all of them at once, not by the most permissive one.
+SOURCE_LICENCES: dict[str, dict[str, str]] = {
+    "cv": {
+        "name": "Common Voice 26.0 mn",
+        "licence": "CC0-1.0",
+        "url": "https://commonvoice.mozilla.org/",
+        "requires": "nothing (public domain dedication)",
+    },
+    "fleurs": {
+        "name": "FLEURS mn_mn",
+        "licence": "CC-BY-4.0",
+        "url": "https://huggingface.co/datasets/google/fleurs",
+        "requires": "**attribution**",
+    },
+    "mbspeech": {
+        "name": "MBSpeech mn",
+        "licence": "MIT",
+        "url": "https://huggingface.co/datasets/btsee/mbspeech_mn",
+        "requires": "**licence and copyright notice**",
+    },
+    "ws": {
+        "name": "WorldSpeech mn_mn",
+        "licence": "CC-BY-NC-4.0",
+        "url": "https://huggingface.co/datasets/disco-eth/WorldSpeech",
+        "requires": "**attribution, and non-commercial use only**",
+    },
+}
+
+
+def resolve_licence(sources: list[str]) -> tuple[str, str]:
+    """The merged corpus's licence tag, and why.
+
+    A merge is bound by every source's terms simultaneously. Declaring
+    `cc0-1.0` for a corpus containing FLEURS strips the CC-BY-4.0 attribution
+    obligation from every downstream user, which the card's own next section
+    then contradicts eleven lines later.
+
+    Only a corpus that is genuinely all-CC0 gets the CC0 tag. Anything mixed is
+    `other`, with the components named, so a reader has to look rather than
+    assume.
+    """
+    known = [s for s in sources if s in SOURCE_LICENCES]
+    licences = {SOURCE_LICENCES[s]["licence"] for s in known}
+    if not licences:
+        return "other", "unknown-source-mix"
+    if licences == {"CC0-1.0"}:
+        return "cc0-1.0", "CC0-1.0"
+    if "CC-BY-NC-4.0" in licences:
+        # The strongest term wins, and this one is a use restriction, not just
+        # an attribution one: a model trained here cannot be used commercially.
+        return "other", "mixed-non-commercial (" + " + ".join(sorted(licences)) + ")"
+    return "other", "mixed (" + " + ".join(sorted(licences)) + ")"
+
+
+def _licence_table(sources: list[str]) -> str:
+    rows = [
+        f"| [{SOURCE_LICENCES[s]['name']}]({SOURCE_LICENCES[s]['url']}) "
+        f"| {SOURCE_LICENCES[s]['licence']} | {SOURCE_LICENCES[s]['requires']} |"
+        for s in sources if s in SOURCE_LICENCES
+    ]
+    return "\n".join(rows)
+
+
 def build_card(corpus_dir: Path) -> str:
     """Generate the dataset card from the manifest and the live thresholds."""
     records = read_manifest(corpus_dir)
@@ -58,10 +122,13 @@ def build_card(corpus_dir: Path) -> str:
     speakers = len({str(r.get("client_id") or "") for r in records})
     sources = sorted({str(r.get("clip_id", "")).split("_")[0] for r in records})
 
+    licence_tag, licence_name = resolve_licence(sources)
+
     return f"""---
 language:
 - mn
-license: cc0-1.0
+license: {licence_tag}
+license_name: {licence_name}
 task_categories:
 - text-to-speech
 - automatic-speech-recognition
@@ -83,9 +150,48 @@ on Mongolian (Khalkha Cyrillic). Sources: {', '.join(sources)}.
 
 ## Licensing
 
-Every source is commercially usable: Common Voice is CC0-1.0, FLEURS is
-CC-BY-4.0, MBSpeech is MIT. WorldSpeech is deliberately excluded — it is by far
-the largest Mongolian corpus (~221 h, 24 kHz native) but CC-BY-NC-4.0.
+This corpus is a **merge**, so it is bound by every source's terms at once —
+not by the most permissive one. The tag above is `{licence_tag}`
+(`{licence_name}`) for exactly that reason.
+
+| source | licence | using this corpus requires |
+|---|---|---|
+{_licence_table(sources)}
+
+Attribution obligations are **not** waived by the merge. If your use is
+commercial, confirm that no CC-BY-NC source is listed above: WorldSpeech
+(~221 h, 24 kHz native — by far the largest Mongolian corpus) is CC-BY-NC-4.0
+and is excluded from the default build for this reason.
+
+## Intended use, and what this corpus should not be used for
+
+Built to finetune a Mongolian text-to-speech model. It is published so that
+Khalkha Cyrillic — a language with no commercially-usable open TTS corpus — has
+one.
+
+**The consent basis is narrower than the technical capability.** Common Voice
+contributors dedicated their recordings CC0 for speech research, and FLEURS and
+MBSpeech speakers recorded for read-speech benchmarks. None of them consented to
+having their individual voice cloned. A zero-shot TTS model finetuned on this
+corpus can reproduce a recognisable voice from roughly ten seconds of audio, and
+`client_id` groups every clip by contributor — so the corpus supports building a
+per-speaker voice whether or not that speaker would agree to it.
+
+Out of scope, and asked of anyone who uses this:
+
+- **do not** synthesise a named or identifiable person's voice without that
+  person's explicit consent;
+- **do not** present synthetic audio as a real recording of anyone;
+- **do not** use it for voice-biometric spoofing, or to attack a system that
+  authenticates people by voice;
+- **do not** redistribute per-speaker subsets in a form that targets an
+  individual contributor.
+
+There is **no watermarking** in this corpus or in the models trained on it, so
+audio produced from it cannot be detected as synthetic by any downstream tool.
+Anyone shipping a voice built from this should say so where listeners can see
+it. If you are a contributor to any source corpus and want your clips removed,
+open an issue on this dataset and they will be dropped from the next build.
 
 ## Quality gates
 
