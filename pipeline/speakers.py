@@ -190,9 +190,15 @@ def speaker_disjoint_split(
     speakers.sort(key=lambda kv: hours(kv[1]), reverse=True)
 
     for _spk, clips in speakers:
-        deficit = max(targets, key=lambda k: targets[k] - filled[k])
-        out[deficit].extend(clips)
-        filled[deficit] += hours(clips)
+        # Fractional deficit, not absolute. Ranking by absolute deficit sends
+        # every speaker to train until train alone is satisfied, so with few
+        # speakers -- or speakers large relative to a 5% split -- validation and
+        # test end up empty.
+        target_split = max(
+            targets, key=lambda k: (targets[k] - filled[k]) / targets[k] if targets[k] else -1.0
+        )
+        out[target_split].extend(clips)
+        filled[target_split] += hours(clips)
 
     for name, rs in out.items():
         log.info("  %-10s %5d clips  %5.1f h  %3d speakers",

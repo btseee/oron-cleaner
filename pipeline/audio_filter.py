@@ -104,6 +104,17 @@ class AudioQualityFilter:
 
         log.info("All models loaded.")
 
+    def normalized_text(self, text: str) -> str:
+        """The exact string that gets published, scored and trained on.
+
+        Exposed so the corpus writer stores the same text the CER gate compared
+        against, rather than re-deriving it and risking drift.
+        """
+        try:
+            return self._normalizer.normalize(text, strict=False)
+        except Exception:
+            return text
+
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
 
     def _load_audio(self, audio_input) -> tuple[np.ndarray | None, str]:

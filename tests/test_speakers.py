@@ -155,6 +155,26 @@ def test_train_receives_the_bulk_of_the_audio():
     assert len(splits["train"]) > len(splits["validation"]) + len(splits["test"])
 
 
+def test_small_splits_are_not_starved():
+    """Every split must receive clips even when speakers are few and large.
+
+    Ranking by absolute deficit sends every speaker to train until train alone
+    is satisfied, so with 12 equal speakers validation got one and test got
+    none. Fractional deficit fills the small splits first.
+    """
+    records = [clip(f"s{i}", dur=120.0) for i in range(12) for _ in range(30)]
+    splits = speaker_disjoint_split(records)
+    for name, rs in splits.items():
+        assert rs, f"{name} is empty"
+
+
+def test_every_split_is_populated_at_the_minimum_speaker_count():
+    """Three speakers is the fewest that can fill three splits."""
+    records = [clip(f"s{i}", dur=60.0) for i in range(3) for _ in range(5)]
+    splits = speaker_disjoint_split(records)
+    assert all(len(rs) > 0 for rs in splits.values())
+
+
 def test_split_is_deterministic():
     records = [clip(f"s{i}", dur=7.0) for i in range(25) for _ in range(3)]
     a = speaker_disjoint_split(records, seed=1)

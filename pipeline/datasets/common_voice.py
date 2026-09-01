@@ -4,10 +4,10 @@ import tarfile
 from pathlib import Path
 
 import requests
-from datasets import Audio, Dataset, DatasetDict, Features, Value
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import OUTPUT_DIR, OUTPUT_SAMPLE_RATE
+from ..constants import OUTPUT_DIR
+from ..corpus import CorpusWriter
 from ..processor import process_split
 from ..stats import CleaningStats
 
@@ -51,35 +51,6 @@ _EXTRA_FIELDS = [
     "age", "gender", "accents", "variant", "segment", "locale",
     "duration_tsv",
 ]
-
-_FEATURES = Features({
-    "client_id":        Value("string"),
-    "path":             Value("string"),
-    "audio":            Audio(sampling_rate=OUTPUT_SAMPLE_RATE),
-    "sentence":         Value("string"),
-    "up_votes":         Value("int32"),
-    "down_votes":       Value("int32"),
-    "age":              Value("string"),
-    "gender":           Value("string"),
-    "accents":          Value("string"),
-    "variant":          Value("string"),
-    "segment":          Value("string"),
-    "locale":           Value("string"),
-    "snr_db":           Value("float32"),
-    "mean_f0_hz":       Value("float32"),
-    "pitch_confidence": Value("float32"),
-    "dnsmos_sig":       Value("float32"),
-    "dnsmos_bak":       Value("float32"),
-    "dnsmos_ovr":       Value("float32"),
-    "dnsmos_p808":      Value("float32"),
-    "align_score":              Value("float32"),
-    "cer":              Value("float32"),
-    "len_ratio":        Value("float32"),
-    "bandwidth_hz":     Value("float32"),
-    "asr_transcript":   Value("string"),
-    "duration_s":       Value("float32"),
-    "duration_tsv":     Value("float32"),
-})
 
 
 class _CvSplit:
@@ -235,35 +206,26 @@ def _load_split(lang_dir: Path, split: str) -> _CvSplit | None:
 
 
 def process_common_voice(
-    filt: AudioQualityFilter, *, api_key: str, resume: bool = True
-) -> tuple[DatasetDict, CleaningStats]:
+    filt: AudioQualityFilter, writer: CorpusWriter, *, api_key: str, resume: bool = True
+) -> CleaningStats:
     log.info("Loading %s Mongolian from Mozilla Data Collective …", _DATASET_NAME)
     archive = _download_archive(api_key)
     lang_dir = _extract_archive(archive)
 
     all_stats = CleaningStats("common_voice_26_mn")
-    split_map: dict[str, Dataset] = {}
-
     for split_name in _SPLITS:
         split = _load_split(lang_dir, split_name)
         if split is None:
             continue
-
-        passing, stats = process_split(
+        all_stats.merge(process_split(
             split,
             filt,
+            writer,
             audio_field="audio",
             text_field="sentence",
             dataset_name="cv",
             split_name=split_name,
             extra_fields=_EXTRA_FIELDS,
             resume=resume,
-        )
-        all_stats.merge(stats)
-
-        if passing:
-            out_name = "other_clean" if split_name == "other" else split_name
-            split_map[out_name] = Dataset.from_list(passing, features=_FEATURES)
-            log.info("  %s → %d clips passed", out_name, len(passing))
-
-    return DatasetDict(split_map), all_stats
+        ))
+    return all_stats

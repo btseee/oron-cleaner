@@ -1,34 +1,46 @@
-"""
-process_split — shared iteration loop used by all three dataset modules.
+"""process_split — the shared iteration loop used by every dataset module.
 
 Responsibilities:
-  - Iterate every clip in a HuggingFace split
-  - Run AudioQualityFilter on each clip
-  - Checkpoint passing records every `batch_size` clips
-  - Resume from the latest checkpoint when requested
-  - Return the full list of passing records and per-split stats
+  - Iterate every clip in a split
+  - Run AudioQualityFilter on each
+  - Write passing clips straight to disk via CorpusWriter
+  - Log every rejection with its stage and reason
+  - Resume by clip id, so a restart re-does no work
+
+Two changes from the previous design.
+
+**Passing clips are no longer accumulated in memory.** They were kept in a list
+with their decoded 24 kHz float32 audio and then copied again by
+`Dataset.from_list`; at Common Voice scale that is roughly 14 GB before
+encoding, doubling during it. Only stats stay in memory now.
+
+**Resume is keyed by clip id, not by batch index.** The old scheme skipped
+`(last_checkpoint + 1) * batch_size` rows, which is only correct if the dataset
+enumerates in exactly the same order every run, and it pickled float32 audio
+into the checkpoint directory. The written manifest is now the checkpoint.
 """
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from .audio_filter import AudioQualityFilter
-from .checkpoint import (
-    flush_gpu_cache,
-    latest_checkpoint_idx,
-    load_prior_batches,
-    save_batch,
-)
+from .checkpoint import flush_gpu_cache
 from .clip_result import ClipResult
-from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR, OUTPUT_SAMPLE_RATE
+from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR
+from .corpus import CorpusWriter
 from .stats import CleaningStats, RejectionLog
 
 log = logging.getLogger(__name__)
+
+_FLUSH_EVERY = 500
 
 
 def process_split(
     split_dataset,
     filt: AudioQualityFilter,
+    writer: CorpusWriter,
     *,
     audio_field: str,
     text_field: str,
@@ -36,44 +48,32 @@ def process_split(
     split_name: str,
     extra_fields: list[str],
     field_renames: dict[str, str] | None = None,
-    batch_size: int = 500,
     resume: bool = True,
-) -> tuple[list[dict], CleaningStats]:
-    """
-    Returns (passing_records, stats).
-
-    extra_fields lists original-item keys to copy into each passing record.
-    field_renames maps original key → destination key for conflict-free copying
-    (used by WorldSpeech to avoid overwriting freshly computed metrics).
-    """
-    ckpt_name = f"{dataset_name}_{split_name}_{FILTER_POLICY_VERSION}"
-    last_ckpt = latest_checkpoint_idx(ckpt_name) if resume else -1
-    skip_until = (last_ckpt + 1) * batch_size if last_ckpt >= 0 else 0
-
-    log.info(
-        "Processing %s/%s  (%d clips, starting at idx %d)",
-        dataset_name, split_name, len(split_dataset), skip_until,
+) -> CleaningStats:
+    """Filter one split into `writer`. Returns the split's stats."""
+    run_name = f"{dataset_name}_{split_name}_{FILTER_POLICY_VERSION}"
+    stats = (
+        _load_stats(run_name, f"{dataset_name}/{split_name}")
+        if resume
+        else CleaningStats(f"{dataset_name}/{split_name}")
     )
 
-    stats = CleaningStats(f"{dataset_name}/{split_name}")
     reject_log = RejectionLog(
-        OUTPUT_DIR / "logs" / f"rejected_{ckpt_name}.csv",
-        append=resume and last_ckpt >= 0,
+        OUTPUT_DIR / "logs" / f"rejected_{run_name}.csv", append=resume
     )
 
-    passing, prior_stats = load_prior_batches(ckpt_name, last_ckpt)
-    stats.merge(prior_stats)
+    total = len(split_dataset)
+    log.info("Processing %s/%s (%d clips)", dataset_name, split_name, total)
 
-    batch_passing: list[dict] = []
-    current_batch_idx = last_ckpt + 1
-    batch_stats = CleaningStats(f"{ckpt_name}/batch_{current_batch_idx:06d}")
-
-    for idx in range(skip_until, len(split_dataset)):
+    processed = 0
+    for idx in range(total):
         item = split_dataset[idx]
+        clip_id = _clip_id(item, dataset_name, split_name, idx)
 
-        clip_id = str(item.get("path") or item.get("id") or idx)
-        ground_truth = item.get(text_field, "")
+        if clip_id in writer:
+            continue
 
+        ground_truth = item.get(text_field, "") or ""
         try:
             result = filt.process_clip(item[audio_field], ground_truth)
         except Exception as exc:
@@ -81,35 +81,45 @@ def process_split(
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
         stats.record(result)
-        batch_stats.record(result)
 
-        if not result.passed:
-            reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
+        if result.passed:
+            writer.add(
+                clip_id,
+                result.audio_normalized,
+                # The normalised text, which is also what CER was scored
+                # against, so the corpus and the score describe one string.
+                filt.normalized_text(ground_truth),
+                _metadata(result, item, extra_fields, field_renames),
+            )
         else:
-            batch_passing.append(_build_record(result, item, extra_fields, field_renames))
+            reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
 
-        if (idx + 1) % batch_size == 0 or idx == len(split_dataset) - 1:
-            save_batch(ckpt_name, current_batch_idx, batch_passing, batch_stats)
-            passing.extend(batch_passing)
-            batch_passing = []
-            current_batch_idx += 1
-            batch_stats = CleaningStats(f"{ckpt_name}/batch_{current_batch_idx:06d}")
-            log.info("  [%d/%d] checkpoint saved — passed so far: %d", idx + 1, len(split_dataset), stats.passed)
+        processed += 1
+        if processed % _FLUSH_EVERY == 0:
+            _save_stats(run_name, stats)
+            log.info("  [%d/%d] passed so far: %d", idx + 1, total, stats.passed)
             flush_gpu_cache()
 
+    _save_stats(run_name, stats)
     reject_log.close()
-    return passing, stats
+    return stats
 
 
-def _build_record(
+def _clip_id(item: dict, dataset_name: str, split_name: str, idx: int) -> str:
+    """Stable identity for resume, unique across datasets sharing a corpus."""
+    raw = item.get("path") or item.get("id") or f"{split_name}_{idx}"
+    return f"{dataset_name}_{Path(str(raw)).stem}"
+
+
+def _metadata(
     result: ClipResult,
     item: dict,
     extra_fields: list[str],
     field_renames: dict[str, str] | None,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
-        "audio": {"array": result.audio_normalized, "sampling_rate": OUTPUT_SAMPLE_RATE},
         "snr_db":           float(result.snr_db),
+        "bandwidth_hz":     float(result.bandwidth_hz),
         "mean_f0_hz":       float(result.mean_f0_hz),
         "pitch_confidence": float(result.pitch_confidence),
         "dnsmos_sig":       float(result.dnsmos_sig),
@@ -120,10 +130,52 @@ def _build_record(
         "cer":              float(result.cer),
         "len_ratio":        float(result.len_ratio),
         "asr_transcript":   result.asr_transcript,
-        "bandwidth_hz":     float(result.bandwidth_hz),
         "duration_s":       float(result.duration_s),
     }
     for field in extra_fields:
         dest = field_renames[field] if (field_renames and field in field_renames) else field
-        record[dest] = item.get(field)
+        value = item.get(field)
+        # Manifest rows are JSON, so anything exotic is stringified rather than
+        # failing the write half way through a long run.
+        record[dest] = (
+            value if isinstance(value, (str, int, float, bool, type(None))) else str(value)
+        )
     return record
+
+
+def _stats_path(run_name: str) -> Path:
+    return OUTPUT_DIR / "checkpoints" / f"{run_name}.json"
+
+
+def _save_stats(run_name: str, stats: CleaningStats) -> None:
+    path = _stats_path(run_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "total": stats.total,
+        "passed": stats.passed,
+        "stage_counts": stats.stage_counts,
+        "total_duration_s": stats.total_duration_s,
+        "sum_dnsmos_ovr": stats.sum_dnsmos_ovr,
+        "sum_snr": stats.sum_snr,
+        "sum_cer": stats.sum_cer,
+    }), encoding="utf-8")
+
+
+def _load_stats(run_name: str, display_name: str) -> CleaningStats:
+    stats = CleaningStats(display_name)
+    path = _stats_path(run_name)
+    if not path.exists():
+        return stats
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        log.warning("Ignoring corrupt stats checkpoint %s", path)
+        return stats
+    stats.total = d.get("total", 0)
+    stats.passed = d.get("passed", 0)
+    stats.stage_counts = d.get("stage_counts", {})
+    stats.total_duration_s = d.get("total_duration_s", 0.0)
+    stats.sum_dnsmos_ovr = d.get("sum_dnsmos_ovr", 0.0)
+    stats.sum_snr = d.get("sum_snr", 0.0)
+    stats.sum_cer = d.get("sum_cer", 0.0)
+    return stats
