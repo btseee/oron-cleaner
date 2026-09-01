@@ -12,14 +12,22 @@ A loader was missing entirely even though `btsee/mbspeech_mn` was oron-tts's
 default training dataset.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from datasets import load_dataset
 
-from ..audio_filter import AudioQualityFilter
 from ..corpus import CorpusWriter
 from ..processor import process_split
 from ..stats import CleaningStats
+
+# AudioQualityFilter is only referenced as a type here. Importing it at
+# runtime would drag Silero VAD, transformers, torchmetrics and the MMS_FA
+# aligner into any process that merely wants to inspect a loader.
+if TYPE_CHECKING:
+    from ..audio_filter import AudioQualityFilter
 
 log = logging.getLogger(__name__)
 

@@ -8,8 +8,9 @@ only make sense across the whole thing:
   FLEURS mn_mn           CC-BY-4.0  ~13 h
   MBSpeech mn            MIT        ~6 h, single male narrator
 
-All three are commercially usable. WorldSpeech is deliberately absent: it is by
-far the largest Mongolian corpus (~221 h, 24 kHz native) but CC-BY-NC-4.0.
+All three are commercially usable. WorldSpeech (~221 h, 24 kHz native) is by far
+the largest Mongolian corpus but CC-BY-NC-4.0, so it is excluded from `all` and
+needs both `--datasets ws` and `--allow-non-commercial`.
 
 Output is wavs plus a manifest, and a `metadata.csv` in the exact
 `audio_file|text` form F5-TTS's prepare_csv_wavs.py requires.
@@ -18,6 +19,7 @@ Usage:
   python clean_pipeline.py --hf-token <TOKEN>
   python clean_pipeline.py --datasets cv,fleurs --no-upload
   python clean_pipeline.py --finalize-only        # re-split without refiltering
+  python clean_pipeline.py --datasets cv,ws --allow-non-commercial
 
 API keys load from .env automatically (API_KEY, HF_TOKEN).
 """
@@ -50,6 +52,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 ALL_SOURCES = ["cv", "fleurs", "mbspeech"]
+# WorldSpeech is ~221 h of 24 kHz-native Mongolian -- by far the largest source
+# and the only one with real full-band content -- but CC-BY-NC-4.0. It is not in
+# ALL_SOURCES and needs --allow-non-commercial as well as being named explicitly.
+OPTIONAL_SOURCES = ["ws"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,7 +67,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cv-api-key", default=os.environ.get("API_KEY", ""),
                    help="Mozilla Data Collective API key (or set API_KEY in .env)")
     p.add_argument("--datasets", default="all",
-                   help=f"Comma-separated: all | {' | '.join(ALL_SOURCES)}")
+                   help=f"Comma-separated: all | {' | '.join(ALL_SOURCES + OPTIONAL_SOURCES)}")
+    p.add_argument("--allow-non-commercial", action="store_true",
+                   help="Permit CC-BY-NC sources (ws). The trained model then "
+                        "cannot be used commercially.")
     p.add_argument("--corpus-dir", type=Path, default=Path("output/oron_mn_strict"))
     p.add_argument("--device", default="", help="cuda or cpu (auto-detected if omitted)")
     p.add_argument("--resume", dest="resume", action="store_true", default=True)
@@ -82,9 +91,10 @@ def resolve_sources(raw: str) -> list[str]:
     keys = [s.strip().lower() for s in raw.split(",") if s.strip()]
     if "all" in keys:
         return list(ALL_SOURCES)
-    unknown = [k for k in keys if k not in ALL_SOURCES]
+    known = ALL_SOURCES + OPTIONAL_SOURCES
+    unknown = [k for k in keys if k not in known]
     if unknown:
-        raise SystemExit(f"Unknown dataset(s): {unknown}. Choose from {ALL_SOURCES}.")
+        raise SystemExit(f"Unknown dataset(s): {unknown}. Choose from {known}.")
     return keys
 
 
@@ -176,6 +186,14 @@ def main() -> None:
             process_mbspeech(quality_filter, writer, resume=args.resume).save(
                 OUTPUT_DIR / "cleaning_report_mbspeech.txt"
             )
+        if "ws" in sources:
+            log.info("=" * 60)
+            from pipeline.datasets.worldspeech import process_worldspeech
+
+            process_worldspeech(
+                quality_filter, writer, resume=args.resume,
+                allow_non_commercial=args.allow_non_commercial,
+            ).save(OUTPUT_DIR / "cleaning_report_ws.txt")
 
     log.info("=" * 60)
     finalize(args.corpus_dir)

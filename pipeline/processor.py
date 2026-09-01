@@ -20,17 +20,23 @@ enumerates in exactly the same order every run, and it pickled float32 audio
 into the checkpoint directory. The written manifest is now the checkpoint.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .audio_filter import AudioQualityFilter
 from .checkpoint import flush_gpu_cache
 from .clip_result import ClipResult
 from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR
 from .corpus import CorpusWriter
 from .stats import CleaningStats, RejectionLog
+
+# Only a type here; importing it at runtime would pull the whole model stack
+# into any process that merely wants to read this module.
+if TYPE_CHECKING:
+    from .audio_filter import AudioQualityFilter
 
 log = logging.getLogger(__name__)
 

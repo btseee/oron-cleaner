@@ -13,8 +13,16 @@ speaker-disjoint split only make sense across the whole thing.
 | FLEURS `mn_mn` | CC-BY-4.0 | ~13 h | 16 kHz native |
 | MBSpeech `mn` | MIT | ~6 h | single male narrator, 16 kHz native |
 
-All commercially usable. **WorldSpeech is deliberately excluded** — by far the
-largest Mongolian corpus (~221 h, 24 kHz native) but CC-BY-NC-4.0.
+All commercially usable.
+
+`disco-eth/WorldSpeech` `mn_mn` is by far the largest Mongolian corpus — ~221 h,
+**24 kHz native**, the only source with real full-band content — but it is
+**CC-BY-NC-4.0**. It is excluded from `all` and needs an explicit double opt-in,
+because including it makes the trained model non-commercial:
+
+```bash
+python clean_pipeline.py --datasets cv,ws --allow-non-commercial
+```
 
 ## Run it
 
