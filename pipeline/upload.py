@@ -13,9 +13,9 @@ log = logging.getLogger(__name__)
 # dataset card content, and commit message.
 _REPO_CONFIG: dict[str, tuple[str, Path, str]] = {
     "cv": (
-        "btsee/common-voices-25-mn",
+        "btsee/common-voices-26-mn",
         Path(__file__).parent / "cards" / "common_voice.md",
-        "Initial upload: cleaned Common Voice 25 Mongolian",
+        "Cleaned Common Voice 26.0 Mongolian (validated split)",
     ),
     "fleurs": (
         "btsee/fleurs-mn",
