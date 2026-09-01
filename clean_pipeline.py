@@ -109,6 +109,7 @@ def finalize(corpus_dir: Path) -> dict:
     """Resolve gender, cap speakers, split, and export. No audio is touched."""
     from pipeline.corpus import (
         read_manifest,
+        rewrite_manifest,
         summarise,
         write_f5_metadata,
         write_parquet_manifest,
@@ -133,6 +134,11 @@ def finalize(corpus_dir: Path) -> dict:
         log.info("Per-speaker cap removed %d clips", before - len(records))
 
     splits = speaker_disjoint_split(records)
+    # Persist the derived fields before anything reads them back. Without this
+    # `split` and `gender_resolved` exist only in the parquet, and every JSONL
+    # consumer silently degrades: training takes the whole corpus, and the
+    # evaluation and voice-selection tools match nothing.
+    rewrite_manifest(corpus_dir, splits)
     for name, rs in splits.items():
         write_f5_metadata(corpus_dir, rs, split=name)
     write_parquet_manifest(corpus_dir, splits)

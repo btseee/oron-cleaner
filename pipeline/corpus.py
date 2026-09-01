@@ -133,6 +133,35 @@ def write_f5_metadata(root: Path | str, records: list[dict], split: str = "train
     return out
 
 
+def rewrite_manifest(root: Path | str, splits: dict[str, list[dict]]) -> Path:
+    """Rewrite manifest.jsonl with the fields finalize() derived.
+
+    `split` and `gender_resolved` are computed in memory by `speaker_disjoint_split`
+    and `propagate_gender`, and used to be written **only** into the parquet. Every
+    downstream consumer reads the JSONL:
+
+      * `build_f5_dataset.py` filters on `split` -- with the key absent its guard
+        silently fell through and training consumed the whole corpus, test included;
+      * `eval_mn.py:pick_reference` and `select_voices.py` filter on
+        `gender_resolved` -- with the key absent they matched nothing;
+      * `upload.py` reports per-gender hours -- always 0.0.
+
+    Writing the derived fields back is what makes the split real.
+    """
+    root = Path(root)
+    path = root / "manifest.jsonl"
+    tmp = path.with_suffix(".jsonl.tmp")
+    n = 0
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        for name, records in splits.items():
+            for r in records:
+                f.write(json.dumps({**r, "split": name}, ensure_ascii=False) + "\n")
+                n += 1
+    tmp.replace(path)
+    log.info("Rewrote %s (%d rows, split and gender persisted)", path, n)
+    return path
+
+
 def write_parquet_manifest(root: Path | str, splits: dict[str, list[dict]]) -> Path:
     """Full metadata for analysis, quality auditing and voice selection."""
     import pandas as pd
