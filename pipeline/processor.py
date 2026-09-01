@@ -10,7 +10,6 @@ Responsibilities:
 """
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from .audio_filter import AudioQualityFilter
@@ -118,7 +117,9 @@ def _build_record(
         "dnsmos_ovr":       float(result.dnsmos_ovr),
         "dnsmos_p808":      float(result.dnsmos_p808),
         "cer":              float(result.cer),
+        "len_ratio":        float(result.len_ratio),
         "asr_transcript":   result.asr_transcript,
+        "bandwidth_hz":     float(result.bandwidth_hz),
         "duration_s":       float(result.duration_s),
     }
     for field in extra_fields:

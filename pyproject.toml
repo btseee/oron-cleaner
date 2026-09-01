@@ -24,17 +24,16 @@ dependencies = [
     "torch>=2.6.0",
     "torchaudio>=2.6.0",
     "torchmetrics[audio]>=1.9.0",
-    "torchcrepe>=0.0.24",
-    "openai-whisper>=20250625",
+    "transformers>=4.40.0",
     "silero-vad>=6.2.1",
     "torchcodec>=0.3.0",
     "librosa>=0.11.0",
     "soundfile>=0.13.1",
-    "pyloudnorm>=0.2.0",
     "datasets[audio]>=4.8.5",
     "huggingface_hub>=1.16.1",
     "jiwer>=4.0.0",
     "numpy>=2.0.0",
+    "oron-tts",
 ]
 
 [project.scripts]

@@ -37,6 +37,8 @@ _FEATURES = Features({
     "clean_dnsmos_ovr":         Value("float32"),
     "clean_dnsmos_p808":        Value("float32"),
     "clean_cer":                Value("float32"),
+    "clean_len_ratio":  Value("float32"),
+    "clean_bandwidth_hz": Value("float32"),
     "clean_asr_transcript":     Value("string"),
     "clean_duration_s":         Value("float32"),
 })
@@ -72,7 +74,7 @@ def process_worldspeech(
     all_stats = CleaningStats("worldspeech_mn")
     split_map: dict[str, Dataset] = {}
 
-    for split_name in ws.keys():
+    for split_name in ws:
         split = _prefilter_by_snr(ws[split_name], split_name)
 
         passing_raw, stats = process_split(

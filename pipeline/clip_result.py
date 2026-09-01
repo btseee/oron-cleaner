@@ -16,6 +16,14 @@ class ClipResult:
     dnsmos_ovr: float = 0.0
     dnsmos_p808: float = 0.0
     cer: float = 0.0
+    # ASR characters over ground-truth characters. Previously computed and then
+    # discarded, so a truncated reading could not be diagnosed after the fact.
+    len_ratio: float = 0.0
     asr_transcript: str = ""
+    # Measured lowpass shelf. Recorded rather than only gated on, because
+    # reference-voice selection needs the brightest clips available and no
+    # Mongolian source is full-band.
+    bandwidth_hz: float = 0.0
+    # Duration of the audio actually shipped, after edge-trimming.
     duration_s: float = 0.0
     audio_normalized: np.ndarray = field(default_factory=lambda: np.zeros(1))

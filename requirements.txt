@@ -2,10 +2,12 @@
 torch>=2.6.0
 torchaudio>=2.6.0
 torchmetrics[audio]>=1.9.0
-torchcrepe>=0.0.24
 
 # Speech models
-openai-whisper>=20250625
+# ASR for transcript agreement. bayartsogt/wav2vec2-large-xlsr-mongolian scores
+# CER 0.123 median where whisper-large-v3 scores 0.311 on the same clips, at a
+# fifth of the parameters -- see oron-tts/docs/phase0-findings.md.
+transformers>=4.40.0
 silero-vad>=6.2.1
 
 # Audio processing
@@ -20,6 +22,11 @@ huggingface_hub>=1.16.1
 
 # Text / evaluation
 jiwer>=4.0.0
+
+# Mongolian text normalization. Shared with oron-tts so that the text published
+# in the corpus, the text scored for CER, and the text used for training are the
+# same string. Pure stdlib -- installing it pulls no extra dependencies.
+oron-tts @ file:../oron-tts
 
 # Numerics
 numpy>=2.0.0

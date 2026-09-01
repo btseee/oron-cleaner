@@ -73,6 +73,8 @@ _FEATURES = Features({
     "dnsmos_ovr":       Value("float32"),
     "dnsmos_p808":      Value("float32"),
     "cer":              Value("float32"),
+    "len_ratio":        Value("float32"),
+    "bandwidth_hz":     Value("float32"),
     "asr_transcript":   Value("string"),
     "duration_s":       Value("float32"),
     "duration_tsv":     Value("float32"),

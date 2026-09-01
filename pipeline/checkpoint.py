@@ -3,9 +3,9 @@ import logging
 import pickle
 from pathlib import Path
 
-from .constants import OUTPUT_DIR
 import torch
 
+from .constants import OUTPUT_DIR
 from .stats import CleaningStats
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,11 @@ def latest_checkpoint_idx(name: str) -> int:
             indices.append(int(d.name.split("_", maxsplit=1)[1]))
         except ValueError:
             log.warning("Ignoring malformed checkpoint directory: %s", d)
-    return indices[-1] if indices else -1
+    # max(), not indices[-1]: Path.iterdir() has no ordering guarantee. It
+    # happens to come back sorted on NTFS and ext4, so the bug is invisible
+    # locally and resumes from the wrong batch elsewhere -- skipping or
+    # reprocessing every clip after it.
+    return max(indices) if indices else -1
 
 
 def save_batch(name: str, batch_idx: int, records: list[dict], stats: CleaningStats) -> None:

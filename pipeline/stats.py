@@ -13,7 +13,7 @@ class RejectionLog:
     def __init__(self, path: Path, *, append: bool = True) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = "a" if append else "w"
-        self._file = open(path, mode, newline="", encoding="utf-8")
+        self._file = open(path, mode, newline="", encoding="utf-8")  # noqa: SIM115 - handle lives for the run, closed in close()
         self._writer = csv.writer(self._file)
         if path.stat().st_size == 0:
             self._writer.writerow(["clip_id", "stage", "reason", "ground_truth"])
@@ -66,14 +66,19 @@ class CleaningStats:
             f"=== {self.name.upper()} — Cleaning Report ===",
             f"Total input clips:          {self.total:>8,}",
         ]
+        # Every reject_stage the filter can emit must appear here, or its
+        # rejections vanish into the "other" bucket and the report stops
+        # explaining why clips were lost.
         stage_labels = {
-            "load":     "Rejected — load error:      ",
-            "duration": "Rejected — too short/long:  ",
-            "vad":      "Rejected — VAD (no speech): ",
-            "snr":      "Rejected — SNR too low:     ",
-            "dnsmos":   "Rejected — DNSMOS too low:  ",
-            "cer":      "Rejected — sentence verify: ",
-            "crash":    "Rejected — processing crash:",
+            "load":      "Rejected — load error:      ",
+            "duration":  "Rejected — too short/long:  ",
+            "clipping":  "Rejected — clipped / DC:    ",
+            "vad":       "Rejected — VAD (no speech): ",
+            "snr":       "Rejected — SNR too low:     ",
+            "bandwidth": "Rejected — bandwidth too low:",
+            "dnsmos":    "Rejected — DNSMOS too low:  ",
+            "cer":       "Rejected — sentence verify: ",
+            "crash":     "Rejected — processing crash:",
         }
         for stage, label in stage_labels.items():
             lines.append(f"{label}{self.stage_counts.get(stage, 0):>8,}")

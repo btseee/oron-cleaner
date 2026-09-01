@@ -3,7 +3,7 @@ import logging
 from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 
 from ..audio_filter import AudioQualityFilter
-from ..constants import OUTPUT_SAMPLE_RATE, SAMPLE_RATE
+from ..constants import OUTPUT_SAMPLE_RATE
 from ..processor import process_split
 from ..stats import CleaningStats
 
@@ -33,6 +33,8 @@ _FEATURES = Features({
     "dnsmos_ovr":        Value("float32"),
     "dnsmos_p808":       Value("float32"),
     "cer":               Value("float32"),
+    "len_ratio":         Value("float32"),
+    "bandwidth_hz":      Value("float32"),
     "asr_transcript":    Value("string"),
     "duration_s":        Value("float32"),
 })
@@ -47,7 +49,7 @@ def process_fleurs(
     all_stats = CleaningStats("fleurs_mn")
     split_map: dict[str, Dataset] = {}
 
-    for split_name in fleurs.keys():
+    for split_name in fleurs:
         passing, stats = process_split(
             fleurs[split_name],
             filt,
