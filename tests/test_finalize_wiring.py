@@ -72,7 +72,7 @@ def test_finalize_persists_split_to_the_jsonl(tmp_path):
     rows = read_manifest(tmp_path)
     assert rows, "finalize produced an empty manifest"
     assert all("split" in r for r in rows)
-    assert set(r["split"] for r in rows) <= {"train", "validation", "test"}
+    assert {r["split"] for r in rows} <= {"train", "validation", "test", "withheld"}
 
 
 def test_finalize_persists_gender_resolved_to_the_jsonl(tmp_path):
@@ -115,7 +115,7 @@ def test_the_jsonl_and_the_csv_splits_agree(tmp_path):
 
     finalize(_write_corpus(tmp_path))
     rows = read_manifest(tmp_path)
-    for split in ("train", "validation", "test"):
+    for split in ("train", "validation", "test", "withheld"):
         name = "metadata.csv" if split == "train" else f"metadata_{split}.csv"
         with open(tmp_path / name, encoding="utf-8-sig") as f:
             csv_rows = list(csv.reader(f, delimiter="|"))[1:]

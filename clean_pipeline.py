@@ -111,10 +111,17 @@ def finalize(corpus_dir: Path) -> dict:
         read_manifest,
         rewrite_manifest,
         summarise,
+        write_eval_sentences,
         write_f5_metadata,
         write_parquet_manifest,
     )
-    from pipeline.speakers import cap_per_speaker, propagate_gender, speaker_disjoint_split
+    from pipeline.speakers import (
+        cap_per_speaker,
+        propagate_gender,
+        reserve_eval_sentences,
+        speaker_disjoint_split,
+        withhold_eval_sentences,
+    )
 
     records = read_manifest(corpus_dir)
     if not records:
@@ -133,7 +140,15 @@ def finalize(corpus_dir: Path) -> dict:
     if len(records) < before:
         log.info("Per-speaker cap removed %d clips", before - len(records))
 
-    splits = speaker_disjoint_split(records)
+    # Withhold sentences from training before splitting, so the CER target text
+    # is genuinely unseen. This is a separate holdout from the speaker one: the
+    # reference prompt needs an unseen speaker, the target text needs unseen
+    # text, and requiring both of one clip leaves 47 usable clips on the
+    # measured corpus shape.
+    reserved = reserve_eval_sentences(records)
+    splits = withhold_eval_sentences(speaker_disjoint_split(records), reserved)
+    write_eval_sentences(corpus_dir, records, reserved)
+
     # Persist the derived fields before anything reads them back. Without this
     # `split` and `gender_resolved` exist only in the parquet, and every JSONL
     # consumer silently degrades: training takes the whole corpus, and the

@@ -162,6 +162,35 @@ def rewrite_manifest(root: Path | str, splits: dict[str, list[dict]]) -> Path:
     return path
 
 
+def write_eval_sentences(
+    root: Path | str, records: list[dict], reserved: set[str]
+) -> Path:
+    """Write the sentences withheld from training, one per line.
+
+    This is the CER target text. It is deliberately not `metadata_test.csv`:
+    that file's job is reference prompts and the ground-truth topline, which
+    need an unseen *speaker*, while this needs unseen *text*. Keeping them in
+    separate files is what lets both be held out without intersecting to
+    nothing.
+    """
+    from .speakers import text_key
+
+    root = Path(root)
+    seen: set[str] = set()
+    lines: list[str] = []
+    for r in records:
+        text = (r.get("text") or "").strip()
+        key = text_key(text)
+        if key in reserved and key not in seen:
+            seen.add(key)
+            lines.append(text)
+
+    out = root / "eval_sentences.txt"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    log.info("Wrote %s (%d held-out sentences)", out, len(lines))
+    return out
+
+
 def write_parquet_manifest(root: Path | str, splits: dict[str, list[dict]]) -> Path:
     """Full metadata for analysis, quality auditing and voice selection."""
     import pandas as pd

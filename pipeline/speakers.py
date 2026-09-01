@@ -56,6 +56,11 @@ FEMALE_F0_MIN_HZ = 170.0
 # number that lets a per-speaker outlier be seen as one.
 MIN_SPEAKERS_PER_EVAL_SPLIT = 3
 
+# Sentences withheld from training so the CER target text is genuinely unseen.
+# eval_mn.py reports over 200 by default; the margin covers sentences later lost
+# to the audio gates.
+EVAL_HELD_OUT_SENTENCES = 400
+
 
 def normalize_gender(value: Any) -> str:
     """Map any release's gender vocabulary onto male/female/unknown."""
@@ -307,4 +312,95 @@ def speaker_disjoint_split(
         log.info("  %-10s %5d clips  %5.1f h  %3d speakers",
                  name, len(rs), _hours(rs),
                  len({str(r.get(speaker_key)) for r in rs if has_known_speaker(r, speaker_key)}))
+    return out
+
+
+def text_key(text: str) -> str:
+    """Compare sentences by content, not by incidental spacing or case."""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def reserve_eval_sentences(
+    records: list[dict],
+    *,
+    n_sentences: int = EVAL_HELD_OUT_SENTENCES,
+    max_fraction: float = 0.2,
+    text_field: str = "text",
+    seed: int = 42,
+) -> set[str]:
+    """Choose sentences to withhold from training, rarest first.
+
+    A speaker-disjoint split is not a text-disjoint one. Common Voice mn has
+    28,858 usable clips over **6,062 distinct sentences** -- 4.76x repetition --
+    so a sentence read by an evaluation speaker was almost certainly read by a
+    training speaker too. Measured under the previous split, **99.6%** of test
+    clips (1,705 of 1,712) had their text in train, which makes CER over them a
+    measure of recall rather than of intelligibility.
+
+    Rarest first is what makes this affordable. Withholding a sentence costs
+    training every clip that carries it, and the sentence distribution is
+    heavy-tailed: on the measured shape, 400 sentences taken from the tail cost
+    about 400 clips (~1.5% of training), where 400 taken at random would cost
+    nearly five times that.
+    """
+    by_text: dict[str, int] = defaultdict(int)
+    for r in records:
+        by_text[text_key(r.get(text_field, ""))] += 1
+    by_text.pop("", None)
+
+    keys = list(by_text)
+    random.Random(seed).shuffle(keys)          # deterministic tie-break
+    keys.sort(key=lambda k: by_text[k])        # then rarest first
+
+    # Never withhold most of a small corpus. The absolute count is sized for
+    # Common Voice's 6,062 sentences; on anything smaller the fraction binds.
+    limit = min(n_sentences, int(len(keys) * max_fraction))
+    if limit < n_sentences:
+        log.info("Corpus has %d distinct sentences; withholding %d, not %d",
+                 len(keys), limit, n_sentences)
+    return set(keys[:limit])
+
+
+def withhold_eval_sentences(
+    splits: dict[str, list[dict]],
+    reserved: set[str],
+    *,
+    speaker_key: str = "client_id",
+    text_field: str = "text",
+) -> dict[str, list[dict]]:
+    """Remove every reserved sentence from training, so it is genuinely unseen.
+
+    The reference prompt and the target text are two different objects with two
+    different requirements, and conflating them was the error in an earlier
+    attempt at this:
+
+      * the **prompt** must come from an unseen *speaker* -- that is the
+        zero-shot condition, and its text is handed to the model anyway;
+      * the **target text** must be unseen *text* -- that is the intelligibility
+        condition, and which voice once read it does not matter.
+
+    Requiring both of the same clip intersects a 10% speaker holdout with a 10%
+    text holdout: on the measured corpus shape that left **47 clips** in test,
+    too few to supply even one reference prompt per gender. Holding the two
+    apart keeps the speaker-disjoint test split whole for prompts and the
+    ground-truth topline, and yields a full unseen sentence list for CER.
+
+    A reserved sentence read by a *training* speaker is usable nowhere: in train
+    it would void the text holdout, and in an evaluation split it would void
+    speaker-disjointness. Those clips move to a `withheld` split rather than
+    being deleted -- the audio still exists, and a manifest that silently loses
+    rows is worse than one that says why it kept them out.
+    """
+    out = dict(splits)
+    train = out.get("train", [])
+    withheld = [r for r in train if text_key(r.get(text_field, "")) in reserved]
+    if withheld:
+        log.info(
+            "Withheld %d sentences from training: %d clips (%.2f h, %.1f%%) moved "
+            "to the 'withheld' split so the evaluation text is genuinely unseen",
+            len(reserved), len(withheld), _hours(withheld),
+            100.0 * len(withheld) / max(1, len(train)),
+        )
+    out["train"] = [r for r in train if text_key(r.get(text_field, "")) not in reserved]
+    out["withheld"] = out.get("withheld", []) + withheld
     return out

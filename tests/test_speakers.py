@@ -17,13 +17,16 @@ from pipeline.speakers import (
     gender_from_f0,
     normalize_gender,
     propagate_gender,
+    reserve_eval_sentences,
     speaker_disjoint_split,
+    text_key,
+    withhold_eval_sentences,
 )
 
 
-def clip(spk, gender="", f0=0.0, dur=5.0, align=0.9, **kw):
+def clip(spk, gender="", f0=0.0, dur=5.0, align=0.9, text="", **kw):
     return {"client_id": spk, "gender": gender, "mean_f0_hz": f0,
-            "duration_s": dur, "align_score": align, **kw}
+            "duration_s": dur, "align_score": align, "text": text, **kw}
 
 
 # ── gender vocabulary ─────────────────────────────────────────────────────────
@@ -303,3 +306,64 @@ def test_no_clip_is_lost_or_duplicated():
     splits = speaker_disjoint_split(records)
     tags = [r["tag"] for rs in splits.values() for r in rs]
     assert sorted(tags) == sorted(r["tag"] for r in records)
+
+
+# ── text holdout ──────────────────────────────────────────────────────────────
+
+def test_reserved_sentences_are_the_rarest_ones():
+    """Withholding a sentence costs training every clip carrying it, and the
+    sentence distribution is heavy-tailed -- so take from the tail."""
+    records = ([clip("a", text="common") for _ in range(100)]
+               + [clip("a", text=f"rare {i}") for i in range(10)])
+    reserved = reserve_eval_sentences(records, n_sentences=5, max_fraction=1.0)
+    assert "common" not in reserved
+    assert len(reserved) == 5
+
+
+def test_reserving_never_eats_a_small_corpus():
+    """The absolute count is sized for Common Voice's 6,062 sentences."""
+    records = [clip("a", text=f"s{i}") for i in range(10)]
+    assert len(reserve_eval_sentences(records, n_sentences=400)) == 2
+
+
+def test_reserved_sentences_leave_training_entirely():
+    """F2: 99.6% of test clips had their text in train, so CER measured recall."""
+    records = [clip(f"s{i}", text=f"sentence {j}", dur=20.0)
+               for i in range(20) for j in range(30)]
+    reserved = reserve_eval_sentences(records, n_sentences=5, max_fraction=1.0)
+    splits = withhold_eval_sentences(speaker_disjoint_split(records), reserved)
+    train_texts = {text_key(r["text"]) for r in splits["train"]}
+    assert not (reserved & train_texts)
+
+
+def test_withheld_clips_are_moved_not_deleted():
+    """A manifest that silently loses rows is worse than one that says why."""
+    records = [clip(f"s{i}", text=f"sentence {j}", dur=20.0)
+               for i in range(20) for j in range(30)]
+    reserved = reserve_eval_sentences(records, n_sentences=5, max_fraction=1.0)
+    splits = withhold_eval_sentences(speaker_disjoint_split(records), reserved)
+    assert sum(len(v) for v in splits.values()) == len(records)
+    assert splits["withheld"]
+
+
+def test_the_text_holdout_does_not_shrink_the_audio_test_split():
+    """The error worth not repeating.
+
+    Requiring one clip to be both speaker-unseen and text-unseen intersects two
+    10% holdouts: on the measured corpus shape that left 47 clips in test, too
+    few for even one reference prompt per gender. The prompt needs an unseen
+    speaker; the target text needs unseen text; they are different objects.
+    """
+    records = [clip(f"s{i}", gender="male" if i % 2 else "female",
+                    text=f"sentence {j}", dur=20.0)
+               for i in range(30) for j in range(40)]
+    records = propagate_gender(records)[0]
+    before = speaker_disjoint_split(records)
+    after = withhold_eval_sentences(before, reserve_eval_sentences(records,
+                                                                  n_sentences=20,
+                                                                  max_fraction=1.0))
+    assert len(after["test"]) == len(before["test"])
+
+
+def test_text_key_ignores_spacing_and_case():
+    assert text_key("  Сайн   байна\tуу ") == text_key("сайн байна уу")
