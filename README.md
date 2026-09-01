@@ -41,6 +41,27 @@ python clean_pipeline.py --finalize-only       # re-split without refiltering
 > dataset page URL. Downloads also require the account to have accepted that
 > dataset's terms in the web UI, and are capped at 30/day per organisation.
 
+## Calibrate before the full run
+
+Every threshold below was set from published figures, small samples, or
+reasoning about what a strict corpus needs — **none against this corpus's own
+distribution**. A threshold 10% too strict silently discards hours of usable
+audio while looking like it worked, and the full pass is 24–48 h.
+
+```bash
+python clean_pipeline.py --datasets cv --calibrate --limit 500 --no-upload
+```
+
+Calibration mode scores **every** gate instead of stopping at the first failure.
+That matters: in a normal run a clip rejected for SNR is never scored for
+DNSMOS, so the DNSMOS rate is only the rate among clips that already passed SNR,
+and the gates cannot be compared. The report gives independent per-gate
+rejection rates, the full distribution of each metric, what the current
+threshold keeps, and the threshold that would hit a target yield.
+
+Then edit `pipeline/constants.py` and re-run without `--calibrate` — the policy
+hash invalidates cached work automatically.
+
 ## Output
 
 ```

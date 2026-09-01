@@ -27,6 +27,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .calibrate import Calibration
 from .checkpoint import flush_gpu_cache
 from .clip_result import ClipResult
 from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR
@@ -55,8 +56,16 @@ def process_split(
     extra_fields: list[str],
     field_renames: dict[str, str] | None = None,
     resume: bool = True,
+    limit: int | None = None,
+    calibration: Calibration | None = None,
 ) -> CleaningStats:
-    """Filter one split into `writer`. Returns the split's stats."""
+    """Filter one split into `writer`. Returns the split's stats.
+
+    `limit` caps how many clips are processed -- enough to read pass rates
+    before committing to a full pass. `calibration`, when supplied, scores every
+    gate instead of stopping at the first failure, which is far slower but is
+    the only way to get comparable per-gate rejection rates.
+    """
     run_name = f"{dataset_name}_{split_name}_{FILTER_POLICY_VERSION}"
     stats = (
         _load_stats(run_name, f"{dataset_name}/{split_name}")
@@ -69,6 +78,9 @@ def process_split(
     )
 
     total = len(split_dataset)
+    if limit is not None:
+        total = min(total, limit)
+        log.info("Limited to the first %d clips", total)
     log.info("Processing %s/%s (%d clips)", dataset_name, split_name, total)
 
     processed = 0
@@ -81,12 +93,16 @@ def process_split(
 
         ground_truth = item.get(text_field, "") or ""
         try:
-            result = filt.process_clip(item[audio_field], ground_truth)
+            result = filt.process_clip(
+                item[audio_field], ground_truth, measure_all=calibration is not None
+            )
         except Exception as exc:
             log.warning("Clip %s crashed: %s", clip_id, exc)
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
         stats.record(result)
+        if calibration is not None:
+            calibration.record(result)
 
         if result.passed:
             writer.add(

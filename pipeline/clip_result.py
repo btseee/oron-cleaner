@@ -8,6 +8,11 @@ class ClipResult:
     passed: bool
     reject_stage: str = ""
     reject_reason: str = ""
+    # Every gate this clip failed, not just the first. Empty in normal
+    # operation, where processing stops at the first failure; populated by
+    # calibration runs, which is how per-gate rejection rates are obtained
+    # rather than only the rate of whichever gate fires first.
+    failed_gates: list[str] = field(default_factory=list)
     snr_db: float = 0.0
     mean_f0_hz: float = 0.0
     pitch_confidence: float = 0.0

@@ -28,6 +28,7 @@ from ..stats import CleaningStats
 # aligner into any process that merely wants to inspect a loader.
 if TYPE_CHECKING:
     from ..audio_filter import AudioQualityFilter
+    from ..calibrate import Calibration
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,9 @@ class _Wrapped:
 
 
 def process_mbspeech(
-    filt: AudioQualityFilter, writer: CorpusWriter, *, resume: bool = True
+    filt: AudioQualityFilter, writer: CorpusWriter, *, resume: bool = True,
+    limit: int | None = None,
+    calibration: Calibration | None = None,
 ) -> CleaningStats:
     log.info("Loading MBSpeech Mongolian …")
     ds = load_dataset("btsee/mbspeech_mn")
@@ -77,5 +80,7 @@ def process_mbspeech(
             split_name=split_name,
             extra_fields=_EXTRA_FIELDS,
             resume=resume,
+            limit=limit,
+            calibration=calibration,
         ))
     return all_stats

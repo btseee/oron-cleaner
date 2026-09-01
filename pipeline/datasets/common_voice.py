@@ -19,6 +19,7 @@ from ..stats import CleaningStats
 # aligner into any process that merely wants to inspect a loader.
 if TYPE_CHECKING:
     from ..audio_filter import AudioQualityFilter
+    from ..calibrate import Calibration
 
 log = logging.getLogger(__name__)
 
@@ -215,7 +216,9 @@ def _load_split(lang_dir: Path, split: str) -> _CvSplit | None:
 
 
 def process_common_voice(
-    filt: AudioQualityFilter, writer: CorpusWriter, *, api_key: str, resume: bool = True
+    filt: AudioQualityFilter, writer: CorpusWriter, *, api_key: str, resume: bool = True,
+    limit: int | None = None,
+    calibration: Calibration | None = None,
 ) -> CleaningStats:
     log.info("Loading %s Mongolian from Mozilla Data Collective …", _DATASET_NAME)
     archive = _download_archive(api_key)
@@ -236,5 +239,7 @@ def process_common_voice(
             split_name=split_name,
             extra_fields=_EXTRA_FIELDS,
             resume=resume,
+            limit=limit,
+            calibration=calibration,
         ))
     return all_stats

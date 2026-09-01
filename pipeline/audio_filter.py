@@ -254,113 +254,129 @@ class AudioQualityFilter:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def process_clip(self, audio_input, ground_truth_text: str) -> ClipResult:
+    def process_clip(
+        self, audio_input, ground_truth_text: str, *, measure_all: bool = False
+    ) -> ClipResult:
+        """Filter one clip.
+
+        With `measure_all`, every gate is evaluated and recorded instead of
+        returning at the first failure. That is how thresholds get calibrated:
+        one pass over a slice yields the real distribution of each metric and
+        the true per-gate rejection rate, rather than only the rate of whichever
+        gate happens to fire first. It is much slower -- the aligner and the ASR
+        run on clips that would otherwise have been discarded early -- so it is
+        for calibration runs, not production.
+        """
+        m: dict = {}
+        failed: list[tuple[str, str]] = []
+
+        def done(audio_out=None) -> ClipResult:
+            stage, reason = failed[0] if failed else ("", "")
+            return ClipResult(
+                passed=not failed,
+                reject_stage=stage,
+                reject_reason=reason,
+                failed_gates=[f"{st}:{rs}" for st, rs in failed],
+                audio_normalized=(
+                    self._prepare_output_audio(audio_out)
+                    if audio_out is not None and not failed
+                    else np.zeros(1, dtype=np.float32)
+                ),
+                **m,
+            )
+
+        def note(stage: str, reason: str) -> bool:
+            """Record a failure. Returns True if processing should continue."""
+            failed.append((stage, reason))
+            return measure_all
+
         audio, err = self._load_audio(audio_input)
         if audio is None:
-            return ClipResult(passed=False, reject_stage="load", reject_reason=err)
+            note("load", err)
+            return done()
 
         raw_duration = len(audio) / SAMPLE_RATE
-        if raw_duration < MIN_DURATION_S:
-            return ClipResult(passed=False, reject_stage="duration",
-                              reject_reason=f"too_short_{raw_duration:.2f}s")
-        if raw_duration > MAX_DURATION_S:
-            return ClipResult(passed=False, reject_stage="duration",
-                              reject_reason=f"too_long_{raw_duration:.2f}s")
+        if raw_duration < MIN_DURATION_S and not note("duration", f"too_short_{raw_duration:.2f}s"):
+            return done()
+        if raw_duration > MAX_DURATION_S and not note("duration", f"too_long_{raw_duration:.2f}s"):
+            return done()
 
         clipped = clipped_ratio(audio)
-        if clipped > MAX_CLIPPED_RATIO:
-            return ClipResult(passed=False, reject_stage="clipping",
-                              reject_reason=f"clipped_{clipped:.4f}")
+        if clipped > MAX_CLIPPED_RATIO and not note("clipping", f"clipped_{clipped:.4f}"):
+            return done()
         dc = dc_offset(audio)
-        if dc > MAX_DC_OFFSET:
-            return ClipResult(passed=False, reject_stage="clipping",
-                              reject_reason=f"dc_offset_{dc:.4f}")
+        if dc > MAX_DC_OFFSET and not note("clipping", f"dc_offset_{dc:.4f}"):
+            return done()
 
         trimmed, timestamps, reason = self._run_vad(audio)
         if trimmed is None:
-            return ClipResult(passed=False, reject_stage="vad", reject_reason=reason)
+            # Terminal regardless of mode: without speech bounds there is
+            # nothing downstream can measure.
+            note("vad", reason)
+            return done()
 
-        # The duration that describes the audio actually shipped. The previous
-        # implementation reported the pre-VAD length, inflating both this column
-        # and every "total hours" figure in the reports.
+        # The duration of the audio actually shipped. The previous
+        # implementation reported the pre-VAD length, inflating this column and
+        # every "total hours" figure in the reports.
         duration_s = len(trimmed) / SAMPLE_RATE
-        if duration_s < MIN_DURATION_S:
-            return ClipResult(passed=False, reject_stage="vad",
-                              reject_reason=f"trimmed_too_short_{duration_s:.2f}s")
+        m["duration_s"] = duration_s
+        if duration_s < MIN_DURATION_S and not note(
+            "vad", f"trimmed_too_short_{duration_s:.2f}s"
+        ):
+            return done()
 
         # Untrimmed audio, deliberately: the noise regions are the measurement.
         snr = estimate_snr(audio, timestamps)
         if np.isnan(snr):
-            return ClipResult(passed=False, reject_stage="snr",
-                              reject_reason="no_silence_to_measure_noise_floor",
-                              duration_s=duration_s)
-        if snr < SNR_MIN_DB:
-            return ClipResult(passed=False, reject_stage="snr",
-                              reject_reason=f"snr_{snr:.1f}dB",
-                              snr_db=snr, duration_s=duration_s)
+            if not note("snr", "no_silence_to_measure_noise_floor"):
+                return done()
+        else:
+            m["snr_db"] = snr
+            if snr < SNR_MIN_DB and not note("snr", f"snr_{snr:.1f}dB"):
+                return done()
 
         bandwidth = measure_bandwidth(trimmed)
-        if bandwidth < MIN_BANDWIDTH_HZ:
-            return ClipResult(passed=False, reject_stage="bandwidth",
-                              reject_reason=f"bandwidth_{bandwidth:.0f}Hz",
-                              snr_db=snr, bandwidth_hz=bandwidth,
-                              duration_s=duration_s)
+        m["bandwidth_hz"] = bandwidth
+        if bandwidth < MIN_BANDWIDTH_HZ and not note(
+            "bandwidth", f"bandwidth_{bandwidth:.0f}Hz"
+        ):
+            return done()
 
         mean_f0, voiced_frac = median_f0(trimmed)
+        m["mean_f0_hz"] = mean_f0
+        m["pitch_confidence"] = voiced_frac
 
         dnsmos_ok, dnsmos, reason = self._score_dnsmos(trimmed)
-        if not dnsmos_ok:
-            return ClipResult(passed=False, reject_stage="dnsmos", reject_reason=reason,
-                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
-                              pitch_confidence=voiced_frac, duration_s=duration_s,
-                              **dnsmos)
+        m.update(dnsmos)
+        if not dnsmos_ok and not note("dnsmos", reason):
+            return done()
 
-        # Primary transcript gate. Runs before the ASR because it is the
-        # stronger signal: measured separation on real Mongolian audio is
-        # 0.722 (worst correct) against 0.547 (worst mismatched), where CER's
-        # own floor on correct clips is 0.123.
+        # Primary transcript gate, ahead of the ASR because it is the stronger
+        # signal: measured separation on real Mongolian audio is 0.722 (worst
+        # correct) against 0.547 (worst mismatched), where CER's own floor on
+        # correct clips is 0.123.
         try:
             norm_gt = self._normalizer.normalize(ground_truth_text, strict=False)
         except Exception as exc:
-            return ClipResult(passed=False, reject_stage="alignment",
-                              reject_reason=f"normalize_error:{exc}",
-                              duration_s=duration_s)
+            note("alignment", f"normalize_error:{exc}")
+            return done()
+
         align = self._aligner.score(trimmed, norm_gt)
         if np.isnan(align):
-            return ClipResult(passed=False, reject_stage="alignment",
-                              reject_reason="alignment_unavailable",
-                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
-                              pitch_confidence=voiced_frac, duration_s=duration_s,
-                              **dnsmos)
-        if align < MIN_ALIGN_SCORE:
-            return ClipResult(passed=False, reject_stage="alignment",
-                              reject_reason=f"align_{align:.3f}",
-                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
-                              pitch_confidence=voiced_frac, align_score=align,
-                              duration_s=duration_s, **dnsmos)
+            if not note("alignment", "alignment_unavailable"):
+                return done()
+        else:
+            m["align_score"] = align
+            if align < MIN_ALIGN_SCORE and not note("alignment", f"align_{align:.3f}"):
+                return done()
 
         reading_ok, cer_val, len_ratio, asr_text, reason = self._verify_reading(
             trimmed, ground_truth_text
         )
+        m["cer"] = cer_val
+        m["len_ratio"] = len_ratio
+        m["asr_transcript"] = asr_text
         if not reading_ok:
-            return ClipResult(passed=False, reject_stage="cer", reject_reason=reason,
-                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
-                              pitch_confidence=voiced_frac, align_score=align,
-                              cer=cer_val, len_ratio=len_ratio,
-                              asr_transcript=asr_text,
-                              duration_s=duration_s, **dnsmos)
+            note("cer", reason)
 
-        return ClipResult(
-            passed=True,
-            snr_db=snr,
-            bandwidth_hz=bandwidth,
-            mean_f0_hz=mean_f0,
-            pitch_confidence=voiced_frac,
-            align_score=align,
-            cer=cer_val,
-            len_ratio=len_ratio,
-            asr_transcript=asr_text,
-            duration_s=duration_s,
-            audio_normalized=self._prepare_output_audio(trimmed),
-            **dnsmos,
-        )
+        return done(trimmed)

@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from datasets import load_dataset
 
+from ..calibrate import Calibration
 from ..corpus import CorpusWriter
 from ..processor import process_split
 from ..stats import CleaningStats
@@ -71,6 +72,8 @@ def process_worldspeech(
     writer: CorpusWriter,
     *,
     resume: bool = True,
+    limit: int | None = None,
+    calibration: Calibration | None = None,
     allow_non_commercial: bool = False,
 ) -> CleaningStats:
     if not allow_non_commercial:
@@ -97,5 +100,7 @@ def process_worldspeech(
             extra_fields=_EXTRA_FIELDS,
             field_renames=_FIELD_RENAMES,
             resume=resume,
+            limit=limit,
+            calibration=calibration,
         ))
     return all_stats

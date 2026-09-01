@@ -78,6 +78,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--finalize-only", action="store_true",
                    help="Re-run splitting and export from the existing manifest")
     p.add_argument("--no-upload", action="store_true", help="Skip the HuggingFace push")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Process only the first N clips per split. Use this to read "
+                        "pass rates before committing to a 24-48 h run.")
+    p.add_argument("--calibrate", action="store_true",
+                   help="Score every gate instead of stopping at the first failure, "
+                        "and write a threshold-calibration report. Much slower; "
+                        "combine with --limit.")
     return p.parse_args()
 
 
@@ -170,20 +177,31 @@ def main() -> None:
 
     quality_filter = AudioQualityFilter(device=device)
 
+    calibration = None
+    if args.calibrate:
+        from pipeline.calibrate import Calibration
+
+        calibration = Calibration()
+        log.info("Calibration mode: every gate is scored, nothing stops early.")
+        if args.limit is None:
+            log.warning("No --limit with --calibrate; this will be very slow.")
+
+    common = {"resume": args.resume, "limit": args.limit, "calibration": calibration}
+
     with CorpusWriter(args.corpus_dir, resume=args.resume) as writer:
         if "cv" in sources:
             log.info("=" * 60)
             process_common_voice(
-                quality_filter, writer, api_key=args.cv_api_key, resume=args.resume
+                quality_filter, writer, api_key=args.cv_api_key, **common
             ).save(OUTPUT_DIR / "cleaning_report_cv.txt")
         if "fleurs" in sources:
             log.info("=" * 60)
-            process_fleurs(quality_filter, writer, resume=args.resume).save(
+            process_fleurs(quality_filter, writer, **common).save(
                 OUTPUT_DIR / "cleaning_report_fleurs.txt"
             )
         if "mbspeech" in sources:
             log.info("=" * 60)
-            process_mbspeech(quality_filter, writer, resume=args.resume).save(
+            process_mbspeech(quality_filter, writer, **common).save(
                 OUTPUT_DIR / "cleaning_report_mbspeech.txt"
             )
         if "ws" in sources:
@@ -191,9 +209,18 @@ def main() -> None:
             from pipeline.datasets.worldspeech import process_worldspeech
 
             process_worldspeech(
-                quality_filter, writer, resume=args.resume,
-                allow_non_commercial=args.allow_non_commercial,
+                quality_filter, writer,
+                allow_non_commercial=args.allow_non_commercial, **common,
             ).save(OUTPUT_DIR / "cleaning_report_ws.txt")
+
+    if calibration is not None:
+        report_path = OUTPUT_DIR / "calibration_report.txt"
+        calibration.save(report_path)
+        print("\n" + calibration.report() + "\n")
+        log.info("Calibration written to %s", report_path)
+        log.info("Adjust pipeline/constants.py, then re-run without --calibrate. "
+                 "The policy hash invalidates cached work automatically.")
+        return
 
     log.info("=" * 60)
     finalize(args.corpus_dir)
