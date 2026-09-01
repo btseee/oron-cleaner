@@ -1,9 +1,9 @@
+from __future__ import annotations
+
 import gc
 import logging
 import pickle
 from pathlib import Path
-
-import torch
 
 from .constants import OUTPUT_DIR
 from .stats import CleaningStats
@@ -82,6 +82,11 @@ def load_prior_batches(name: str, last_idx: int) -> tuple[list[dict], CleaningSt
 
 
 def flush_gpu_cache() -> None:
+    # Imported here rather than at module scope: everything else in this file is
+    # path and pickle handling, and a top-level `import torch` made the
+    # checkpoint tests -- and CI -- need the whole 2 GB stack to run them.
+    import torch
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()

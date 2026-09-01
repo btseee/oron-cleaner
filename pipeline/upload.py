@@ -15,8 +15,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from huggingface_hub import HfApi
-
 from . import constants
 from .corpus import read_manifest
 
@@ -251,6 +249,10 @@ def upload_corpus(corpus_dir: Path | str, repo_id: str = REPO_ID) -> None:
     if not (corpus_dir / "manifest.jsonl").exists():
         log.warning("No manifest at %s — skipping upload.", corpus_dir)
         return
+
+    # Imported here, not at module scope: building and checking the card is
+    # pure string work, and a top-level import made it need the Hub client.
+    from huggingface_hub import HfApi
 
     api = HfApi()
     log.info("Creating / verifying %s", repo_id)

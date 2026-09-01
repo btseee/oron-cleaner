@@ -15,11 +15,14 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
-requires-python = ">=3.14"
+# 3.12, not 3.14. The RunPod PyTorch image this pipeline runs on ships 3.12, so
+# a >=3.14 floor was unsatisfiable on the only machine that will ever run the
+# 24-48 h pass -- and oron-tts, which this depends on, pins 3.12 as well.
+requires-python = ">=3.12"
 dependencies = [
     "torch>=2.6.0",
     "torchaudio>=2.6.0",
@@ -34,6 +37,10 @@ dependencies = [
     "huggingface_hub>=1.16.1",
     "jiwer>=4.0.0",
     "numpy>=2.0.0",
+    # Mongolian text normalisation, shared with oron-tts so the text published in
+    # the corpus, scored for CER, and used for training is one string. Pure
+    # stdlib, so this pulls nothing extra. Install it first:
+    #     pip install -e ../oron-tts    (or from the repo)
     "oron-tts",
 ]
 
@@ -51,7 +58,7 @@ packages = ["pipeline"]
 
 # ── Ruff (linter + formatter) ────────────────────────────────────────────────
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
@@ -63,7 +70,7 @@ known-first-party = ["pipeline"]
 
 # ── Mypy (type checker) ──────────────────────────────────────────────────────
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 warn_unused_ignores = true

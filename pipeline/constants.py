@@ -7,6 +7,8 @@ checkpoints instead of silently reusing clips filtered under the old policy.
 Measurements behind these numbers live in `oron-tts/docs/phase0-findings.md`.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path

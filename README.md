@@ -34,7 +34,10 @@ python clean_pipeline.py --datasets cv,ws --allow-non-commercial
 ## Run it
 
 ```bash
-pip install -e .
+pip install -e ../oron-tts                     # shared text normalisation
+pip install -r requirements.lock               # pinned; -e . for the loose ranges
+pip install -e . --no-deps
+
 python clean_pipeline.py                       # all sources, then upload
 python clean_pipeline.py --datasets cv --no-upload
 python clean_pipeline.py --finalize-only       # re-split without refiltering

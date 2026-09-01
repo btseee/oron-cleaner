@@ -1,0 +1,68 @@
+name: test
+
+# The 205 tests in these two repos never ran anywhere but a laptop. A
+# transformers or torch release could change what the gates measure with no
+# signal at all, which is exactly what the pinned lockfile and this workflow
+# exist to catch.
+
+on:
+  push:
+    branches: [main, "**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is what the RunPod PyTorch image ships and what the corpus pass
+        # will actually run on. 3.13 is here to catch the next floor early.
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out oron-tts
+        uses: actions/checkout@v4
+        with:
+          repository: btseee/oron-tts
+          path: .oron-tts
+          # The text normaliser is shared: the string published in the corpus,
+          # the string CER is scored against and the string used for training
+          # are one string, produced by this package.
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # Not the full lockfile: the tests deliberately avoid the model stack,
+          # so installing 2 GB of torch to run them would only make CI slow
+          # enough to be switched off. What torch does reach is behind
+          # pytest.importorskip.
+          pip install pytest ruff numpy soundfile pandas pyarrow librosa
+          pip install -e .oron-tts
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest -q
+
+  lockfile:
+    # A lockfile that drifts from pyproject.toml is worse than none, because it
+    # is believed. This checks coverage rather than re-resolving: recompiling
+    # and diffing would turn "some package released today" into a red build,
+    # which teaches people to ignore the signal.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_lockfile.py

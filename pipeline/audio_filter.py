@@ -26,6 +26,8 @@ Two properties matter more than any individual threshold:
   duration describes the audio actually shipped, not the pre-trim input.
 """
 
+from __future__ import annotations
+
 import logging
 
 import jiwer
