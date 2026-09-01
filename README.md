@@ -79,9 +79,11 @@ output/oron_mn_strict/
   wavs/<clip_id>.wav        24 kHz mono, edge-trimmed, peak-normalised
   metadata.csv              audio_file|text — F5-TTS prepare_csv_wavs.py contract
   metadata_validation.csv   likewise
-  metadata_test.csv         likewise
+  metadata_test.csv         likewise — speaker-disjoint, for reference prompts
+  metadata_withheld.csv     clips whose sentence is held out; trained on by nothing
+  eval_sentences.txt        400 sentences no training clip contains — the CER text
   manifest.parquet          per-clip metrics and speaker metadata
-  manifest.jsonl            the same rows, written as clips pass
+  manifest.jsonl            the same rows, plus split and gender_resolved
   corpus_summary.txt        hours, speakers, and the acceptance criteria
 ```
 
@@ -122,6 +124,26 @@ audio, scoring each clip against its own transcript and against another's:
 Clean separation on both. The threshold sits at 0.65 and is biased toward
 rejecting: a mismatched clip teaches a wrong text-to-audio mapping, a rejected
 good clip only costs data.
+
+## Two holdouts, not one
+
+A speaker-disjoint split is not a text-disjoint one, and conflating them makes
+both useless. Common Voice mn repeats each of its 6,062 sentences 4.76 times, so
+a sentence read by an evaluation speaker was almost certainly read by a training
+speaker too — measured under an earlier split, **99.6%** of test clips had their
+text in train.
+
+They are held out separately because they answer different questions:
+
+| holdout | what it protects | where it lands |
+|---|---|---|
+| **speaker** | the zero-shot claim — a prompt from a voice the model never heard | `metadata_test.csv` |
+| **text** | intelligibility — CER over sentences the model never read | `eval_sentences.txt` |
+
+Requiring one clip to satisfy both intersects the two, which on the measured
+corpus shape leaves **47 clips** in test — not enough for one reference prompt
+per gender. Kept apart, test keeps ~2 h across ~100 speakers and there are 400
+genuinely unseen sentences, at a cost of ~1.5% of training hours.
 
 ## Gender
 
