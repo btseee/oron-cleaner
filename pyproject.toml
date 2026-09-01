@@ -26,6 +26,7 @@ dependencies = [
     "torchmetrics[audio]>=1.9.0",
     "transformers>=4.40.0",
     "silero-vad>=6.2.1",
+    "uroman>=1.3.1",
     "torchcodec>=0.3.0",
     "librosa>=0.11.0",
     "soundfile>=0.13.1",

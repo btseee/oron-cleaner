@@ -116,6 +116,7 @@ def _build_record(
         "dnsmos_bak":       float(result.dnsmos_bak),
         "dnsmos_ovr":       float(result.dnsmos_ovr),
         "dnsmos_p808":      float(result.dnsmos_p808),
+        "align_score":      float(result.align_score),
         "cer":              float(result.cer),
         "len_ratio":        float(result.len_ratio),
         "asr_transcript":   result.asr_transcript,

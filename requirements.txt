@@ -9,6 +9,10 @@ torchmetrics[audio]>=1.9.0
 # fifth of the parameters -- see oron-tts/docs/phase0-findings.md.
 transformers>=4.40.0
 silero-vad>=6.2.1
+# Forced alignment (torchaudio MMS_FA) is the primary transcript gate. The model
+# is trained on romanised text across 1,100+ languages, so Mongolian Cyrillic is
+# romanised with uroman first.
+uroman>=1.3.1
 
 # Audio processing
 torchcodec>=0.3.0

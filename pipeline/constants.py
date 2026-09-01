@@ -76,7 +76,14 @@ DNSMOS_MIN_BAK: float = 2.5
 MAX_CER: float = 0.20
 # Forced alignment is the primary gate: it is constrained to the given
 # transcript, so a low score is real evidence of mismatch rather than ASR error.
-MIN_ALIGN_SCORE: float = 0.40
+# Calibrated on real Mongolian audio -- correct against deliberately mismatched
+# transcripts, both corpora separating cleanly:
+#     FLEURS        correct min 0.829   mismatched max 0.443
+#     Common Voice  correct min 0.722   mismatched max 0.547
+# Worst-case gap is 0.547..0.722. 0.65 sits above the worst mismatch with margin
+# and is biased toward rejection: a mismatched clip teaches a wrong text-to-audio
+# mapping, a rejected good clip only costs data.
+MIN_ALIGN_SCORE: float = 0.65
 # Guards against an ASR that stopped early or ran away.
 MIN_LEN_RATIO: float = 0.60
 MAX_LEN_RATIO: float = 1.60

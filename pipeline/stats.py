@@ -77,6 +77,7 @@ class CleaningStats:
             "snr":       "Rejected — SNR too low:     ",
             "bandwidth": "Rejected — bandwidth too low:",
             "dnsmos":    "Rejected — DNSMOS too low:  ",
+            "alignment": "Rejected — forced alignment:",
             "cer":       "Rejected — sentence verify: ",
             "crash":     "Rejected — processing crash:",
         }

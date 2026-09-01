@@ -9,7 +9,7 @@ Stages, in order:
   6. Bandwidth                   (lowpass shelf detection)
   7. Pitch metadata              (librosa pyin; diagnostic, never rejects)
   8. AI MOS score                (DNSMOS P.835)
-  9. Transcript agreement        (wav2vec2-xlsr-mongolian + CER)
+  9. Transcript agreement        (MMS_FA forced alignment, then CER)
  10. Output preparation          (resample to 24 kHz, peak-normalise)
 
 Two properties matter more than any individual threshold:
@@ -37,6 +37,7 @@ from oron_tts.text import MongolianNormalizer
 from silero_vad import get_speech_timestamps, load_silero_vad
 from torchmetrics.audio.dnsmos import DeepNoiseSuppressionMeanOpinionScore
 
+from .alignment import ForcedAligner
 from .clip_result import ClipResult
 from .constants import (
     DNSMOS_MIN_BAK,
@@ -45,6 +46,7 @@ from .constants import (
     MAX_CLIPPED_RATIO,
     MAX_DC_OFFSET,
     MAX_DURATION_S,
+    MIN_ALIGN_SCORE,
     MIN_BANDWIDTH_HZ,
     MIN_DURATION_S,
     OUTPUT_SAMPLE_RATE,
@@ -92,6 +94,8 @@ class AudioQualityFilter:
 
         self._asr_processor = AutoProcessor.from_pretrained(ASR_MODEL)
         self._asr = AutoModelForCTC.from_pretrained(ASR_MODEL).to(device).eval()
+
+        self._aligner = ForcedAligner(device=device)
 
         log.info("Loading DNSMOS …")
         self._dnsmos = DeepNoiseSuppressionMeanOpinionScore(
@@ -300,14 +304,39 @@ class AudioQualityFilter:
                               pitch_confidence=voiced_frac, duration_s=duration_s,
                               **dnsmos)
 
+        # Primary transcript gate. Runs before the ASR because it is the
+        # stronger signal: measured separation on real Mongolian audio is
+        # 0.722 (worst correct) against 0.547 (worst mismatched), where CER's
+        # own floor on correct clips is 0.123.
+        try:
+            norm_gt = self._normalizer.normalize(ground_truth_text, strict=False)
+        except Exception as exc:
+            return ClipResult(passed=False, reject_stage="alignment",
+                              reject_reason=f"normalize_error:{exc}",
+                              duration_s=duration_s)
+        align = self._aligner.score(trimmed, norm_gt)
+        if np.isnan(align):
+            return ClipResult(passed=False, reject_stage="alignment",
+                              reject_reason="alignment_unavailable",
+                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
+                              pitch_confidence=voiced_frac, duration_s=duration_s,
+                              **dnsmos)
+        if align < MIN_ALIGN_SCORE:
+            return ClipResult(passed=False, reject_stage="alignment",
+                              reject_reason=f"align_{align:.3f}",
+                              snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
+                              pitch_confidence=voiced_frac, align_score=align,
+                              duration_s=duration_s, **dnsmos)
+
         reading_ok, cer_val, len_ratio, asr_text, reason = self._verify_reading(
             trimmed, ground_truth_text
         )
         if not reading_ok:
             return ClipResult(passed=False, reject_stage="cer", reject_reason=reason,
                               snr_db=snr, bandwidth_hz=bandwidth, mean_f0_hz=mean_f0,
-                              pitch_confidence=voiced_frac, cer=cer_val,
-                              len_ratio=len_ratio, asr_transcript=asr_text,
+                              pitch_confidence=voiced_frac, align_score=align,
+                              cer=cer_val, len_ratio=len_ratio,
+                              asr_transcript=asr_text,
                               duration_s=duration_s, **dnsmos)
 
         return ClipResult(
@@ -316,6 +345,7 @@ class AudioQualityFilter:
             bandwidth_hz=bandwidth,
             mean_f0_hz=mean_f0,
             pitch_confidence=voiced_frac,
+            align_score=align,
             cer=cer_val,
             len_ratio=len_ratio,
             asr_transcript=asr_text,

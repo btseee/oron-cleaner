@@ -36,6 +36,7 @@ _FEATURES = Features({
     "clean_dnsmos_bak":         Value("float32"),
     "clean_dnsmos_ovr":         Value("float32"),
     "clean_dnsmos_p808":        Value("float32"),
+    "clean_align_score": Value("float32"),
     "clean_cer":                Value("float32"),
     "clean_len_ratio":  Value("float32"),
     "clean_bandwidth_hz": Value("float32"),

@@ -32,6 +32,7 @@ _FEATURES = Features({
     "dnsmos_bak":        Value("float32"),
     "dnsmos_ovr":        Value("float32"),
     "dnsmos_p808":       Value("float32"),
+    "align_score":               Value("float32"),
     "cer":               Value("float32"),
     "len_ratio":         Value("float32"),
     "bandwidth_hz":      Value("float32"),

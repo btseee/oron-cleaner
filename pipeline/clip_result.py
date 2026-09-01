@@ -15,6 +15,10 @@ class ClipResult:
     dnsmos_bak: float = 0.0
     dnsmos_ovr: float = 0.0
     dnsmos_p808: float = 0.0
+    # Primary transcript gate. Constrained to the given transcript, so a low
+    # score means the audio does not contain those words -- unlike CER, which
+    # also moves when the recogniser simply struggles.
+    align_score: float = 0.0
     cer: float = 0.0
     # ASR characters over ground-truth characters. Previously computed and then
     # discarded, so a truncated reading could not be diagnosed after the fact.
