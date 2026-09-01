@@ -89,10 +89,24 @@ MIN_LEN_RATIO: float = 0.60
 MAX_LEN_RATIO: float = 1.60
 
 # ── Speaker balance ───────────────────────────────────────────────────────────
-# The top 10 of 520 Common Voice speakers hold 45.7% of validated clips; the
+# The top 10 of 511 Common Voice speakers hold 45.7% of validated clips; the
 # largest single contributor has 1,956. Without a cap the model collapses toward
 # a handful of voices.
-MAX_CLIPS_PER_SPEAKER: int = 400
+#
+# Counted in hours rather than clips. Common Voice validated averages 5.07 s
+# (33,331 clips / 46.9 h), so the previous 400-clip cap was 0.56 h for that
+# source -- but the same number meant something different for every other
+# source, because it silently tracked clip length.
+MAX_SPEAKER_HOURS: float = 0.6
+
+# A cap buys voice diversity. A source with one narrator has none to buy, so
+# capping it only deletes audio. MBSpeech is 3,846 clips / 6.3 h under a single
+# male narrator: at 400 clips the cap kept 0.66 h and discarded 5.64 h of the
+# cleanest male speech available, in a corpus whose binding acceptance criterion
+# is male hours (Common Voice supplies 10.7 h male before any gate). Declared
+# single-narrator sources get a budget set by how much one voice the corpus can
+# tolerate, not by parity with a crowd-sourced contributor.
+MAX_NARRATOR_HOURS: float = 8.0
 
 
 def _policy_version() -> str:

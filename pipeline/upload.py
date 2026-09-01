@@ -37,7 +37,9 @@ def _gate_table() -> str:
                          f"{constants.DNSMOS_MIN_SIG} · BAK ≥ {constants.DNSMOS_MIN_BAK}"),
         ("forced alignment", f"≥ {constants.MIN_ALIGN_SCORE} (MMS_FA, primary gate)"),
         ("CER", f"≤ {constants.MAX_CER} (wav2vec2-xlsr-mongolian)"),
-        ("per-speaker cap", f"{constants.MAX_CLIPS_PER_SPEAKER} clips"),
+        ("per-speaker cap", f"{constants.MAX_SPEAKER_HOURS:g} h "
+                            f"({constants.MAX_NARRATOR_HOURS:g} h for a "
+                            f"single-narrator source)"),
     ]
     return "\n".join(f"| {name} | {value} |" for name, value in rows)
 

@@ -3,6 +3,23 @@
 CC-BY-4.0, ~13 h. 16 kHz native, so its bandwidth is capped at ~7.7 kHz -- it
 adds clean read speech and both genders, but cannot supply a bright reference
 clip.
+
+Two things the schema forces, both verified against the dataset builder:
+
+* **`gender` is a `ClassLabel(names=['male', 'female', 'other'])`**, so a row
+  yields `0`/`1`/`2`, not a string. `normalize_gender(0)` stringifies to `"0"`,
+  misses every alias, and returns unknown -- so before this wrapper *every*
+  FLEURS gender label was silently discarded. Same bug class as the
+  `male_masculine` one the speakers module documents for Common Voice v17.
+* **There is no speaker column at all.** id, num_samples, path, audio,
+  transcription, raw_transcription, gender, lang_id, language, lang_group_id --
+  that is the whole schema. `id` is the *sentence* index, shared by every
+  recording of that sentence, so it identifies text rather than a voice.
+
+The second cannot be fixed here, only declared: each clip carries
+`speaker_known: False` so `speaker_disjoint_split` routes the whole block to
+training instead of inventing one pseudo-speaker per clip and degenerating to a
+row-level random split for ~20% of the corpus.
 """
 
 from __future__ import annotations
@@ -27,8 +44,32 @@ log = logging.getLogger(__name__)
 
 _EXTRA_FIELDS = [
     "id", "num_samples", "path", "raw_transcription", "transcription",
-    "gender", "lang_id", "language", "lang_group_id",
+    "gender", "lang_id", "language", "lang_group_id", "speaker_known",
 ]
+
+
+class _Decoded:
+    """Turn the ClassLabel gender into its name and declare speakers unknown."""
+
+    def __init__(self, split) -> None:
+        self._split = split
+        feature = split.features.get("gender")
+        # int2str exists only on ClassLabel. Guarding on the method rather than
+        # the type keeps this working if a future release ships plain strings.
+        self._int2str = getattr(feature, "int2str", None)
+
+    def __len__(self) -> int:
+        return len(self._split)
+
+    def __getitem__(self, idx: int) -> dict:
+        item = dict(self._split[idx])
+        raw = item.get("gender")
+        if self._int2str is not None and isinstance(raw, int):
+            item["gender"] = self._int2str(raw)
+        # 'other' is in the label set and maps to unknown, as it should: it
+        # describes identity, not a vocal tract.
+        item["speaker_known"] = False
+        return item
 
 
 def process_fleurs(
@@ -42,7 +83,7 @@ def process_fleurs(
     all_stats = CleaningStats("fleurs_mn")
     for split_name in fleurs:
         all_stats.merge(process_split(
-            fleurs[split_name],
+            _Decoded(fleurs[split_name]),
             filt,
             writer,
             audio_field="audio",

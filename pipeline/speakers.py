@@ -25,7 +25,7 @@ import random
 from collections import defaultdict
 from typing import Any
 
-from .constants import MAX_CLIPS_PER_SPEAKER
+from .constants import MAX_NARRATOR_HOURS, MAX_SPEAKER_HOURS
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,10 @@ _GENDER_ALIASES: dict[str, str] = {
 # left UNKNOWN rather than guessed.
 MALE_F0_MAX_HZ = 155.0
 FEMALE_F0_MIN_HZ = 170.0
+
+# An evaluation split with one voice measures that voice. Three is the smallest
+# number that lets a per-speaker outlier be seen as one.
+MIN_SPEAKERS_PER_EVAL_SPLIT = 3
 
 
 def normalize_gender(value: Any) -> str:
@@ -128,12 +132,27 @@ def cap_per_speaker(
     records: list[dict],
     *,
     speaker_key: str = "client_id",
-    max_clips: int = MAX_CLIPS_PER_SPEAKER,
+    max_hours: float = MAX_SPEAKER_HOURS,
+    narrator_hours: float = MAX_NARRATOR_HOURS,
 ) -> list[dict]:
-    """Keep each speaker's best `max_clips` clips, preserving input order.
+    """Keep each speaker's best clips up to an hours budget, in input order.
 
-    Without this the corpus is dominated by a few prolific contributors and the
-    model collapses toward their voices.
+    Without a cap the corpus is dominated by a few prolific contributors and the
+    model collapses toward their voices -- the top 10 of 511 Common Voice
+    speakers hold 45.7% of validated clips.
+
+    Two things this gets right that a clip-count cap did not.
+
+    **The budget is hours.** A count silently tracks clip length, so the same
+    number meant a different amount of speech for every source.
+
+    **A single-narrator source gets its own budget.** Capping one narrator
+    cannot increase voice diversity, because there is no second voice in that
+    source to make room for -- it can only delete audio. The clip cap took
+    MBSpeech from 6.3 h to 0.66 h: 5.64 h of the cleanest male speech in the
+    corpus, discarded against an acceptance criterion measured in male hours.
+    Sources declare `single_narrator: True`; the exemption is not inferred from
+    a speaker simply being large.
     """
     by_speaker: dict[str, list[int]] = defaultdict(list)
     for i, r in enumerate(records):
@@ -141,12 +160,36 @@ def cap_per_speaker(
 
     keep: set[int] = set()
     for indices in by_speaker.values():
-        if len(indices) <= max_clips:
-            keep.update(indices)
-        else:
-            ranked = sorted(indices, key=lambda i: _quality(records[i]), reverse=True)
-            keep.update(ranked[:max_clips])
+        budget = (
+            narrator_hours
+            if any(records[i].get("single_narrator") for i in indices)
+            else max_hours
+        )
+        # Best first, so the budget buys the best available speech.
+        ranked = sorted(indices, key=lambda i: _quality(records[i]), reverse=True)
+        spent = 0.0
+        for i in ranked:
+            duration = float(records[i].get("duration_s") or 0.0) / 3600.0
+            if spent + duration > budget and spent > 0.0:
+                continue
+            keep.add(i)
+            spent += duration
     return [r for i, r in enumerate(records) if i in keep]
+
+
+def _hours(rs: list[dict]) -> float:
+    return sum(float(x.get("duration_s") or 0.0) for x in rs) / 3600.0
+
+
+def has_known_speaker(record: dict, speaker_key: str = "client_id") -> bool:
+    """Whether this clip's voice can be told apart from another's.
+
+    A source that supplies no speaker column sets `speaker_known: False`
+    explicitly. Absent that flag, a non-empty id is taken at face value.
+    """
+    if record.get("speaker_known") is False:
+        return False
+    return bool(str(record.get(speaker_key) or "").strip())
 
 
 def speaker_disjoint_split(
@@ -155,6 +198,7 @@ def speaker_disjoint_split(
     speaker_key: str = "client_id",
     val_fraction: float = 0.05,
     test_fraction: float = 0.05,
+    min_speakers: int = MIN_SPEAKERS_PER_EVAL_SPLIT,
     seed: int = 42,
 ) -> dict[str, list[dict]]:
     """Split by speaker, so no speaker appears in more than one split.
@@ -163,45 +207,104 @@ def speaker_disjoint_split(
     row-level random split. Evaluating a voice-cloning model on speakers it
     trained on measures memorisation.
 
-    Speakers are assigned largest-first to whichever split is furthest below its
-    target duration, which keeps small splits from being dominated by one
-    prolific speaker.
+    Two properties this has to hold that the first version did not.
+
+    **Clips whose speaker is unknown go wholly to training.** FLEURS supplies no
+    speaker column at all -- the fallback used to invent `__anon_{i}` per clip,
+    so for that ~13 h block the "speaker-disjoint" split degenerated to a
+    row-level random one and FLEURS' ~100 real speakers appeared on both sides.
+    Sending the whole block to training cannot leak: a split it never enters
+    cannot share a voice with it.
+
+    **Evaluation splits are filled smallest-first, alternating gender.**
+    Assigning largest-first to the emptiest split put the single most prolific
+    contributor in test and the next in validation -- one voice each, and the
+    two biggest speakers removed from training. Small speakers reach the same
+    5% target while leaving the large ones where the model needs them, and
+    alternating genders keeps a male reference available in every split.
     """
+    identified = [r for r in records if has_known_speaker(r, speaker_key)]
+    anonymous = [r for r in records if not has_known_speaker(r, speaker_key)]
+    if anonymous:
+        log.warning(
+            "%d clips (%.1f h) have no speaker id; assigning all to train. "
+            "They cannot be used for evaluation -- a split cannot be shown "
+            "disjoint from a voice it cannot name.",
+            len(anonymous), _hours(anonymous),
+        )
+
     by_speaker: dict[str, list[dict]] = defaultdict(list)
-    for i, r in enumerate(records):
-        by_speaker[str(r.get(speaker_key) or f"__anon_{i}")].append(r)
+    for r in identified:
+        by_speaker[str(r[speaker_key])].append(r)
 
-    def hours(rs: list[dict]) -> float:
-        return sum(float(x.get("duration_s") or 0.0) for x in rs) / 3600.0
+    # Targets are fractions of the whole corpus, so the anonymous block does not
+    # shrink the evaluation splits -- it only limits which clips can fill them.
+    total = _hours(records)
+    targets = {"test": total * test_fraction, "validation": total * val_fraction}
 
-    total = hours(records)
-    targets = {
-        "validation": total * val_fraction,
-        "test": total * test_fraction,
-        "train": total * (1.0 - val_fraction - test_fraction),
-    }
-    out: dict[str, list[dict]] = {k: [] for k in targets}
-    filled = dict.fromkeys(targets, 0.0)
+    def gender_of(clips: list[dict]) -> str:
+        # A speaker has one gender; take the first resolved one seen.
+        for c in clips:
+            if c.get("gender_resolved"):
+                return str(c["gender_resolved"])
+        return UNKNOWN
 
     # Shuffle first so equal-duration speakers tie-break deterministically but
-    # not by dictionary order, then sort largest-first.
+    # not by dictionary order, then sort smallest-first.
     speakers = list(by_speaker.items())
     random.Random(seed).shuffle(speakers)
-    speakers.sort(key=lambda kv: hours(kv[1]), reverse=True)
+    speakers.sort(key=lambda kv: _hours(kv[1]))
 
-    for _spk, clips in speakers:
-        # Fractional deficit, not absolute. Ranking by absolute deficit sends
-        # every speaker to train until train alone is satisfied, so with few
-        # speakers -- or speakers large relative to a 5% split -- validation and
-        # test end up empty.
-        target_split = max(
-            targets, key=lambda k: (targets[k] - filled[k]) / targets[k] if targets[k] else -1.0
-        )
-        out[target_split].extend(clips)
-        filled[target_split] += hours(clips)
+    # Smallest-first queue per gender. Popping from the front takes the smallest
+    # remaining speaker of that gender.
+    pools: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
+    for spk, clips in speakers:
+        pools[gender_of(clips)].append((spk, clips))
+    # Unknown gender last: a clip that cannot be attributed to a voice type is
+    # the least useful thing to spend a small evaluation split on.
+    gender_order = sorted(pools, key=lambda g: (g == UNKNOWN, g))
+
+    out: dict[str, list[dict]] = {"train": [], "validation": [], "test": []}
+    taken: set[str] = set()
+
+    # No evaluation split may claim more than a third of the speakers, however
+    # short of its hours target it is. Without the cap a corpus with three
+    # speakers gives test all three and leaves train empty -- the minimum is a
+    # goal, not a licence to consume the corpus.
+    budget = max(1, len(speakers) // 3)
+
+    for split in ("test", "validation"):
+        chosen: list[str] = []
+        filled = 0.0
+        by_gender = dict.fromkeys(gender_order, 0.0)
+        while len(chosen) < budget and (filled < targets[split] or len(chosen) < min_speakers):
+            # Take from whichever gender this split has least of, so neither
+            # split ends up single-gender and unable to supply a male prompt.
+            available = [g for g in gender_order if pools[g]]
+            if not available:
+                break
+            gender = min(available, key=lambda g: (by_gender[g], gender_order.index(g)))
+            spk, clips = pools[gender].pop(0)
+            out[split].extend(clips)
+            taken.add(spk)
+            chosen.append(spk)
+            filled += _hours(clips)
+            by_gender[gender] += _hours(clips)
+        if len(chosen) < min_speakers:
+            log.warning(
+                "%s has only %d speaker(s); %d were asked for. A split with one "
+                "voice measures that voice, not the model.",
+                split, len(chosen), min_speakers,
+            )
+
+    # Original record order, so the manifest is stable across runs.
+    out["train"] = [
+        r for r in records
+        if not has_known_speaker(r, speaker_key) or str(r[speaker_key]) not in taken
+    ]
 
     for name, rs in out.items():
         log.info("  %-10s %5d clips  %5.1f h  %3d speakers",
-                 name, len(rs), hours(rs),
-                 len({str(r.get(speaker_key)) for r in rs}))
+                 name, len(rs), _hours(rs),
+                 len({str(r.get(speaker_key)) for r in rs if has_known_speaker(r, speaker_key)}))
     return out

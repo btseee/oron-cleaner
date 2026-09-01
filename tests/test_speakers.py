@@ -10,6 +10,8 @@ import pytest
 from pipeline.speakers import (
     FEMALE,
     MALE,
+    MAX_NARRATOR_HOURS,
+    MAX_SPEAKER_HOURS,
     UNKNOWN,
     cap_per_speaker,
     gender_from_f0,
@@ -111,22 +113,66 @@ def test_conflicting_labels_leave_the_speaker_unknown():
 
 def test_prolific_speaker_is_capped():
     """The largest Common Voice contributor has 1,956 of 33,258 clips."""
-    records = [clip("loud", align=0.9) for _ in range(50)] + [clip("quiet")]
-    out = cap_per_speaker(records, max_clips=10)
+    records = [clip("loud", align=0.9, dur=360.0) for _ in range(50)] + [clip("quiet")]
+    out = cap_per_speaker(records, max_hours=1.0)
     assert sum(1 for r in out if r["client_id"] == "loud") == 10
     assert sum(1 for r in out if r["client_id"] == "quiet") == 1
 
 
 def test_cap_keeps_the_best_clips():
-    records = [clip("s", align=0.5), clip("s", align=0.95), clip("s", align=0.7)]
-    out = cap_per_speaker(records, max_clips=1)
-    assert out[0]["align_score"] == 0.95
+    records = [clip("s", align=a, dur=3600.0) for a in (0.5, 0.95, 0.7)]
+    out = cap_per_speaker(records, max_hours=1.0)
+    assert [r["align_score"] for r in out] == [0.95]
 
 
 def test_cap_preserves_input_order():
-    records = [clip("s", align=a) for a in (0.95, 0.5, 0.9)]
-    out = cap_per_speaker(records, max_clips=2)
+    records = [clip("s", align=a, dur=1800.0) for a in (0.95, 0.5, 0.9)]
+    out = cap_per_speaker(records, max_hours=1.0)
     assert [r["align_score"] for r in out] == [0.95, 0.9]
+
+
+def test_the_budget_is_hours_not_clips():
+    """A clip count silently tracks clip length: 400 clips is 0.56 h of Common
+    Voice at its 5.07 s mean and something else entirely for any other source."""
+    short = [clip("a", dur=2.0) for _ in range(3000)]     # 1.67 h
+    long = [clip("b", dur=20.0) for _ in range(300)]       # 1.67 h, 10x fewer clips
+    out = cap_per_speaker(short + long, max_hours=1.0)
+    a = sum(r["duration_s"] for r in out if r["client_id"] == "a") / 3600
+    b = sum(r["duration_s"] for r in out if r["client_id"] == "b") / 3600
+    assert a == pytest.approx(1.0, abs=0.01)
+    assert b == pytest.approx(1.0, abs=0.01)
+
+
+def test_a_single_narrator_source_gets_its_own_budget():
+    """M14: at 400 clips the cap kept 0.66 h of MBSpeech and deleted 5.64 h --
+    the cleanest male audio in a corpus gated on male hours."""
+    mb = [clip("narrator", dur=5.9, single_narrator=True) for _ in range(3846)]
+    kept = sum(r["duration_s"] for r in cap_per_speaker(mb)) / 3600
+    assert kept == pytest.approx(6.3, abs=0.1)
+
+
+def test_the_narrator_exemption_is_declared_not_inferred():
+    """A merely prolific crowd contributor must not acquire the exemption by
+    being large."""
+    loud = [clip("loud", dur=5.9) for _ in range(3846)]
+    kept = sum(r["duration_s"] for r in cap_per_speaker(loud)) / 3600
+    assert kept == pytest.approx(MAX_SPEAKER_HOURS, abs=0.01)
+
+
+def test_even_an_exempt_narrator_is_bounded():
+    mb = [clip("narrator", dur=60.0, single_narrator=True) for _ in range(2000)]
+    kept = sum(r["duration_s"] for r in cap_per_speaker(mb)) / 3600
+    assert kept == pytest.approx(MAX_NARRATOR_HOURS, abs=0.05)
+
+
+def test_a_speaker_under_budget_is_untouched():
+    records = [clip("s", dur=5.0) for _ in range(10)]
+    assert len(cap_per_speaker(records)) == 10
+
+
+def test_one_clip_longer_than_the_budget_is_still_kept():
+    """Dropping it would silently delete a speaker entirely."""
+    assert len(cap_per_speaker([clip("s", dur=7200.0)], max_hours=1.0)) == 1
 
 
 # ── speaker-disjoint splits ───────────────────────────────────────────────────
@@ -181,3 +227,79 @@ def test_split_is_deterministic():
     b = speaker_disjoint_split(records, seed=1)
     assert {k: [r["client_id"] for r in v] for k, v in a.items()} == \
            {k: [r["client_id"] for r in v] for k, v in b.items()}
+
+
+# ── split composition ─────────────────────────────────────────────────────────
+
+def test_clips_without_a_speaker_id_all_go_to_train():
+    """FLEURS supplies no speaker column at all.
+
+    The `__anon_{i}` fallback gave every such clip its own pseudo-speaker, so
+    an anonymous clip could be assigned to test while other recordings of the
+    same unnameable voice sat in train. The speaker distribution is heavy-tailed
+    on purpose -- that is what the real corpus looks like, and it is the shape
+    under which the leak appears at all.
+    """
+    known = [clip(f"s{s}", gender="male" if s % 2 else "female", dur=5.0)
+             for s in range(40)
+             for _ in range(max(1, int(120 / (s + 1) ** 0.85)))]
+    anon = [clip("", dur=9.8, speaker_known=False) for _ in range(500)]
+    splits = speaker_disjoint_split(propagate_gender(known + anon)[0])
+    assert sum(1 for r in splits["train"] if r.get("speaker_known") is False) == len(anon)
+    for name in ("validation", "test"):
+        assert not any(r.get("speaker_known") is False for r in splits[name])
+
+
+def test_an_empty_client_id_counts_as_unknown():
+    records = [clip("", dur=60.0) for _ in range(20)] + \
+              [clip(f"s{i}", dur=60.0) for i in range(9) for _ in range(5)]
+    splits = speaker_disjoint_split(records)
+    assert all(r["client_id"] for r in splits["test"])
+    assert all(r["client_id"] for r in splits["validation"])
+
+
+def test_evaluation_splits_carry_several_speakers():
+    """F3: the largest-first assignment put one speaker in test and one in
+    validation, so the whole evaluation rested on two voices."""
+    records = [clip(f"s{i}", gender="male" if i % 2 else "female", dur=30.0)
+               for i in range(30) for _ in range(20)]
+    splits = speaker_disjoint_split(propagate_gender(records)[0])
+    for name in ("validation", "test"):
+        assert len({r["client_id"] for r in splits[name]}) >= 3, name
+
+
+def test_evaluation_splits_carry_both_genders():
+    """A split with no male clip cannot supply a male reference prompt, and the
+    male voice is the corpus's binding constraint."""
+    records = [clip(f"s{i}", gender="male" if i % 2 else "female", dur=30.0)
+               for i in range(30) for _ in range(20)]
+    splits = speaker_disjoint_split(propagate_gender(records)[0])
+    for name in ("validation", "test"):
+        assert {r["gender_resolved"] for r in splits[name]} == {MALE, FEMALE}, name
+
+
+def test_the_largest_speakers_stay_in_training():
+    """Removing the most prolific contributors costs training far more than it
+    buys a 5% split, which smaller speakers can fill just as well."""
+    records = [clip(f"small{i}", gender="male" if i % 2 else "female", dur=5.0)
+               for i in range(40) for _ in range(5)]
+    records += [clip("whale", gender="female", dur=5.0) for _ in range(2000)]
+    splits = speaker_disjoint_split(propagate_gender(records)[0])
+    assert all(r["client_id"] == "whale" for r in splits["train"] if r["client_id"] == "whale")
+    assert "whale" not in {r["client_id"] for r in splits["test"]}
+    assert "whale" not in {r["client_id"] for r in splits["validation"]}
+
+
+def test_no_speaker_appears_in_two_splits():
+    records = [clip(f"s{i}", gender="male" if i % 2 else "female", dur=20.0)
+               for i in range(30) for _ in range(8)]
+    splits = speaker_disjoint_split(propagate_gender(records)[0])
+    seen = [{r["client_id"] for r in rs} for rs in splits.values()]
+    assert not (seen[0] & seen[1]) and not (seen[0] & seen[2]) and not (seen[1] & seen[2])
+
+
+def test_no_clip_is_lost_or_duplicated():
+    records = [clip(f"s{i}", dur=9.0, tag=f"{i}_{j}") for i in range(20) for j in range(6)]
+    splits = speaker_disjoint_split(records)
+    tags = [r["tag"] for rs in splits.values() for r in rs]
+    assert sorted(tags) == sorted(r["tag"] for r in records)

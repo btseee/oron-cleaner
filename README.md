@@ -10,8 +10,15 @@ speaker-disjoint split only make sense across the whole thing.
 | source | licence | raw hours | notes |
 |---|---|---|---|
 | Common Voice 26.0 `mn` | CC0-1.0 | ~40 h | `validated` only, after the down-vote gate |
-| FLEURS `mn_mn` | CC-BY-4.0 | ~13 h | 16 kHz native |
+| FLEURS `mn_mn` | CC-BY-4.0 | ~13 h | 16 kHz native; **no speaker column**, so train-only |
 | MBSpeech `mn` | MIT | ~6 h | single male narrator, 16 kHz native |
+
+FLEURS' schema is `id, num_samples, path, audio, transcription,
+raw_transcription, gender, lang_id, language, lang_group_id` — there is no
+speaker field, and `id` indexes the *sentence*. Its clips therefore go wholly to
+training: a split cannot be shown disjoint from a voice it cannot name. Its
+`gender` is a `ClassLabel`, so a row yields `0`/`1`/`2` and needs decoding before
+it means anything.
 
 All commercially usable.
 
@@ -87,7 +94,7 @@ output/oron_mn_strict/
 | DNSMOS P.835 | OVR ≥2.8 · SIG ≥3.0 · BAK ≥2.5 | ~2.0 is "poor" on a 1–5 scale |
 | **forced alignment** | **≥0.65** | primary transcript gate |
 | CER | ≤0.20 | secondary, on clips that already aligned |
-| per-speaker cap | 400 clips | top 10 of 520 speakers held 45.7% of clips |
+| per-speaker cap | 0.6 h (8 h for a single-narrator source) | top 10 of 511 speakers held 45.7% of clips; a count would track clip length instead of speech |
 
 Thresholds live in `pipeline/constants.py` and are hashed into
 `FILTER_POLICY_VERSION`, so changing one invalidates cached work instead of

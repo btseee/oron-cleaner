@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 # and the speaker-disjoint split silently do nothing.
 SPEAKER_ID = "mbspeech_narrator_01"
 
-_EXTRA_FIELDS = ["sentence_orig", "sentence_norm", "client_id", "gender"]
+_EXTRA_FIELDS = ["sentence_orig", "sentence_norm", "client_id", "gender",
+                 "single_narrator"]
 
 
 class _Wrapped:
@@ -53,6 +54,11 @@ class _Wrapped:
         item = dict(self._split[idx])
         item["client_id"] = SPEAKER_ID
         item["gender"] = "male"
+        # Exempts this source from the per-speaker cap. A cap buys voice
+        # diversity; one narrator has none to buy, so capping here would only
+        # delete the cleanest male audio in the corpus -- 5.64 h of 6.3 h under
+        # the previous 400-clip rule.
+        item["single_narrator"] = True
         item.setdefault("path", f"mbspeech_{idx:06d}")
         return item
 
