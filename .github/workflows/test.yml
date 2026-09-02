@@ -45,7 +45,9 @@ jobs:
           # so installing 2 GB of torch to run them would only make CI slow
           # enough to be switched off. What torch does reach is behind
           # pytest.importorskip.
-          pip install pytest ruff numpy soundfile pandas pyarrow librosa
+          # pyyaml: the end-to-end test reads the training config through
+          # preflight, which is the other half of the cross-repo contract.
+          pip install pytest ruff numpy soundfile pandas pyarrow librosa pyyaml
           pip install -e .oron-tts
 
       - name: Lint
@@ -53,6 +55,18 @@ jobs:
 
       - name: Test
         run: pytest -q
+
+      # Spelled out separately because it is the one test that spans both repos.
+      # It skips itself when the oron-tts checkout is missing, and a silent skip
+      # would hide exactly the class of defect it exists to catch -- so the
+      # checkout is asserted before pytest is given the chance to skip.
+      - name: End-to-end chain must actually run
+        run: |
+          test -d .oron-tts/scripts || {
+            echo "oron-tts checkout missing; the cross-repo test would skip." >&2
+            exit 1
+          }
+          pytest tests/test_end_to_end.py -q
 
   lockfile:
     # A lockfile that drifts from pyproject.toml is worse than none, because it

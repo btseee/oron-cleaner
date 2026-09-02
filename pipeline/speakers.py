@@ -295,11 +295,29 @@ def speaker_disjoint_split(
     out: dict[str, list[dict]] = {"train": [], "validation": [], "test": []}
     taken: set[str] = set()
 
-    # No evaluation split may claim more than a third of the speakers, however
-    # short of its hours target it is. Without the cap a corpus with three
-    # speakers gives test all three and leaves train empty -- the minimum is a
-    # goal, not a licence to consume the corpus.
-    budget = max(1, len(speakers) // 3)
+    # The two evaluation splits together may claim at most a third of the
+    # speakers, so training always keeps the clear majority. `min_speakers` is a
+    # goal *within* this budget, not a licence to exceed it.
+    #
+    # A third total, not a third each: at a third each, a 12-speaker corpus gave
+    # test 4 and validation 4 and left training 4 -- 39% of the clips. Found by
+    # running the real pipeline end to end rather than by reasoning about it.
+    # The bug is invisible at Common Voice scale, where the hours target binds
+    # hundreds of speakers before this cap does.
+    #
+    # Below three identified speakers a speaker-disjoint split does not exist,
+    # and emptying training to pretend otherwise is the wrong way to fail: an
+    # empty evaluation split is a missing measurement, an empty training split
+    # is a missing corpus.
+    if len(speakers) < 3:
+        log.warning(
+            "Only %d identified speaker(s): no speaker-disjoint split is "
+            "possible, so everything goes to train and there is nothing to "
+            "evaluate on.", len(speakers),
+        )
+        budget = 0
+    else:
+        budget = max(1, len(speakers) // 6)
 
     for split in ("test", "validation"):
         chosen: list[str] = []

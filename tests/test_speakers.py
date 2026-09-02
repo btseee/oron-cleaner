@@ -367,3 +367,38 @@ def test_the_text_holdout_does_not_shrink_the_audio_test_split():
 
 def test_text_key_ignores_spacing_and_case():
     assert text_key("  Сайн   байна\tуу ") == text_key("сайн байна уу")
+
+
+def test_training_keeps_the_majority_of_a_small_corpus():
+    """Found by running the pipeline end to end, not by reasoning about it.
+
+    At a third of the speakers *each*, a 12-speaker corpus gave test 4 and
+    validation 4 and left training 4 -- 39% of the clips. The cap is a third
+    across both evaluation splits together. Invisible at Common Voice scale,
+    where the hours target binds hundreds of speakers before the cap does.
+    """
+    records = propagate_gender(
+        [clip(f"s{s}", gender="male" if s % 2 else "female", dur=6.0, text=f"t{s}{c}")
+         for s in range(12) for c in range(20)]
+    )[0]
+    splits = speaker_disjoint_split(records)
+    total = sum(len(v) for v in splits.values())
+    assert len(splits["train"]) / total > 0.6
+
+
+def test_evaluation_never_takes_more_than_a_third_of_the_speakers():
+    for n_speakers in (6, 12, 30, 120):
+        records = propagate_gender(
+            [clip(f"s{s}", gender="male" if s % 2 else "female", dur=6.0, text=f"t{s}{c}")
+             for s in range(n_speakers) for c in range(10)]
+        )[0]
+        splits = speaker_disjoint_split(records)
+        held = len({r["client_id"] for r in splits["validation"]}) + \
+               len({r["client_id"] for r in splits["test"]})
+        assert held <= max(2, n_speakers // 3), f"{n_speakers} speakers: {held} held out"
+
+
+def test_train_is_never_empty_however_few_speakers():
+    for n_speakers in (1, 2, 3, 5):
+        records = [clip(f"s{s}", dur=60.0) for s in range(n_speakers) for _ in range(5)]
+        assert speaker_disjoint_split(records)["train"], f"{n_speakers} speakers"
