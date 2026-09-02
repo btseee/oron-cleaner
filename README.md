@@ -85,6 +85,7 @@ output/oron_mn_strict/
   manifest.parquet          per-clip metrics and speaker metadata
   manifest.jsonl            the same rows, plus split and gender_resolved
   corpus_summary.txt        hours, speakers, and the acceptance criteria
+  provenance.json           pinned revisions, package versions, content hash
 ```
 
 ## Gates
@@ -104,6 +105,13 @@ output/oron_mn_strict/
 Thresholds live in `pipeline/constants.py` and are hashed into
 `FILTER_POLICY_VERSION`, so changing one invalidates cached work instead of
 silently mixing policies.
+
+That hash covers the thresholds and **nothing else** — not the ASR, aligner, VAD
+or DNSMOS revisions, not the source dataset revisions, and not `oron_tts.text`,
+whose every change rewrites every published transcript. `provenance.json`
+records all of those plus a content hash of the corpus, and the model and
+dataset revisions are pinned to commit SHAs in `pipeline/provenance.py` so a
+rebuild is a rebuild rather than a re-derivation.
 
 ### Why forced alignment rather than ASR
 

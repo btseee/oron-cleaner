@@ -21,6 +21,7 @@ from datasets import load_dataset
 
 from ..corpus import CorpusWriter
 from ..processor import process_split
+from ..provenance import PINNED_REVISIONS
 from ..stats import CleaningStats
 
 # AudioQualityFilter is only referenced as a type here. Importing it at
@@ -69,7 +70,7 @@ def process_mbspeech(
     calibration: Calibration | None = None,
 ) -> CleaningStats:
     log.info("Loading MBSpeech Mongolian …")
-    ds = load_dataset("btsee/mbspeech_mn")
+    ds = load_dataset("btsee/mbspeech_mn", revision=PINNED_REVISIONS["btsee/mbspeech_mn"])
 
     all_stats = CleaningStats("mbspeech_mn")
     for split_name in ds:

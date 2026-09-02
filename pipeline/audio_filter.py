@@ -70,6 +70,7 @@ from .dsp import (
     median_f0,
     reading_passes,
 )
+from .provenance import PINNED_REVISIONS
 
 log = logging.getLogger(__name__)
 
@@ -94,8 +95,13 @@ class AudioQualityFilter:
         log.info("Loading %s …", ASR_MODEL)
         from transformers import AutoModelForCTC, AutoProcessor
 
-        self._asr_processor = AutoProcessor.from_pretrained(ASR_MODEL)
-        self._asr = AutoModelForCTC.from_pretrained(ASR_MODEL).to(device).eval()
+        # Pinned: `main` moves, and a recogniser that changed under the CER
+        # gate silently changes which clips enter the corpus.
+        rev = PINNED_REVISIONS[ASR_MODEL]
+        self._asr_processor = AutoProcessor.from_pretrained(ASR_MODEL, revision=rev)
+        self._asr = (
+            AutoModelForCTC.from_pretrained(ASR_MODEL, revision=rev).to(device).eval()
+        )
 
         self._aligner = ForcedAligner(device=device)
 

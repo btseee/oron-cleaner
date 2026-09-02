@@ -107,6 +107,7 @@ def resolve_sources(raw: str) -> list[str]:
 
 def finalize(corpus_dir: Path) -> dict:
     """Resolve gender, cap speakers, split, and export. No audio is touched."""
+    from pipeline import provenance
     from pipeline.corpus import (
         read_manifest,
         rewrite_manifest,
@@ -157,6 +158,10 @@ def finalize(corpus_dir: Path) -> dict:
     for name, rs in splits.items():
         write_f5_metadata(corpus_dir, rs, split=name)
     write_parquet_manifest(corpus_dir, splits)
+    # What was actually used: model and dataset revisions, package
+    # versions, the normaliser's source fingerprint, and a content hash
+    # of the corpus. FILTER_POLICY_VERSION covers the thresholds only.
+    provenance.write(corpus_dir, records, splits)
 
     report = summarise(splits)
     (corpus_dir / "corpus_summary.txt").write_text(report, encoding="utf-8")

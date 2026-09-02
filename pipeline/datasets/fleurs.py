@@ -31,6 +31,7 @@ from datasets import load_dataset
 
 from ..corpus import CorpusWriter
 from ..processor import process_split
+from ..provenance import PINNED_REVISIONS
 from ..stats import CleaningStats
 
 # AudioQualityFilter is only referenced as a type here. Importing it at
@@ -78,7 +79,7 @@ def process_fleurs(
     calibration: Calibration | None = None,
 ) -> CleaningStats:
     log.info("Loading FLEURS Mongolian …")
-    fleurs = load_dataset("google/fleurs", "mn_mn")
+    fleurs = load_dataset("google/fleurs", "mn_mn", revision=PINNED_REVISIONS["google/fleurs"])
 
     all_stats = CleaningStats("fleurs_mn")
     for split_name in fleurs:

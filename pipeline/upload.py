@@ -201,6 +201,12 @@ Policy version `{constants.FILTER_POLICY_VERSION}`, derived from a hash of these
 values, so a threshold change invalidates cached work rather than silently
 mixing policies.
 
+`provenance.json` in this repository records what the thresholds alone do not:
+the pinned model and dataset revisions, the installed package versions, a
+fingerprint of the text-normalisation source that produced every transcript, and
+a content hash of the corpus itself. Two builds that agree on the content hash
+produced the same corpus; two that agree only on the policy version did not.
+
 **Forced alignment is the primary transcript gate.** Free-running ASR is the
 wrong instrument in Mongolian: the best available model has a CER floor of 0.123
 on clean, correctly-transcribed speech (whisper-large-v3 is 0.311), so any
