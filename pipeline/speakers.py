@@ -49,6 +49,20 @@ _GENDER_ALIASES: dict[str, str] = {
 #     female  min 172.7  median 241.4   max 305.9
 # Zero overlap, with a 150.3..172.7 gap. The dead band between these bounds is
 # left UNKNOWN rather than guessed.
+#
+# Two limits worth stating rather than discovering later.
+#
+# **80 clips is a small basis for a corpus-wide decision.** Zero overlap on 80
+# says the bands are far apart, not that no speaker falls between them; the dead
+# band is the hedge, and `gender_source` records which clips relied on this so
+# an F0-derived label can be excluded from an analysis that should not trust it.
+#
+# **The F0 is measured by the same pipeline that gates the clip**, so a clip
+# whose pitch tracking is poor is both more likely to be gated out and more
+# likely to be misgendered if it survives. The bias runs toward clips with clean
+# pitch, which is the population this calibration was drawn from -- so the
+# measured separation is, if anything, optimistic for the clips that need it
+# most. Declared labels always win precisely because of this.
 MALE_F0_MAX_HZ = 155.0
 FEMALE_F0_MIN_HZ = 170.0
 
@@ -125,7 +139,16 @@ def propagate_gender(
 
 
 def _quality(record: dict) -> float:
-    """Rank clips within a speaker. Alignment first: it is the strongest signal."""
+    """Rank clips within a speaker. Alignment first: it is the strongest signal.
+
+    Note what this does to a capped speaker: it keeps their *easiest*
+    utterances. Alignment score correlates with clear articulation and simple
+    text, so a speaker trimmed from 2,000 clips to a 0.6 h budget contributes a
+    cleaner, blander sample of their speech than they actually produced. That is
+    the right trade for a TTS corpus -- a mismatched clip teaches a wrong
+    mapping -- but it means the corpus systematically under-represents difficult
+    speech, and any claim about robustness has to account for it.
+    """
     return (
         float(record.get("align_score") or 0.0) * 2.0
         + float(record.get("dnsmos_ovr") or 0.0) / 5.0
