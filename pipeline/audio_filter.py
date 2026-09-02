@@ -111,11 +111,16 @@ class AudioQualityFilter:
 
         Exposed so the corpus writer stores the same text the CER gate compared
         against, rather than re-deriving it and risking drift.
+
+        Raises whatever the normaliser raises. It used to swallow the exception
+        and return the raw text, which would have published a transcript with
+        unexpanded digits -- "20-иос" rather than "хориос" -- as though it were
+        the normalised form, and trained on it. The CER and alignment gates
+        already reject a clip the normaliser refuses, so reaching this is a
+        disagreement between two paths that must not be resolved by publishing
+        the worse string. `process_split` turns it into a rejection.
         """
-        try:
-            return self._normalizer.normalize(text, strict=False)
-        except Exception:
-            return text
+        return self._normalizer.normalize(text, strict=False)
 
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
 

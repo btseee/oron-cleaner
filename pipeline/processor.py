@@ -100,6 +100,22 @@ def process_split(
             log.warning("Clip %s crashed: %s", clip_id, exc)
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
+        # The normalised text is also what CER was scored against, so the
+        # corpus and the score describe one string. The normaliser refuses
+        # constructions it cannot expand without guessing (oron-tts
+        # docs/normaliser-review.md); the CER and alignment gates reject those
+        # already, so this is the belt to their braces. Resolved *before*
+        # stats.record so a refusal is counted as the rejection it is rather
+        # than as a pass -- and never published with unexpanded digits.
+        text = ""
+        if result.passed:
+            try:
+                text = filt.normalized_text(ground_truth)
+            except Exception as exc:
+                result = ClipResult(
+                    passed=False, reject_stage="normalize", reject_reason=str(exc)
+                )
+
         stats.record(result)
         if calibration is not None:
             calibration.record(result)
@@ -108,9 +124,7 @@ def process_split(
             writer.add(
                 clip_id,
                 result.audio_normalized,
-                # The normalised text, which is also what CER was scored
-                # against, so the corpus and the score describe one string.
-                filt.normalized_text(ground_truth),
+                text,
                 _metadata(result, item, extra_fields, field_renames),
             )
         else:
