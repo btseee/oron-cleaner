@@ -81,6 +81,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--limit", type=int, default=None,
                    help="Process only the first N clips per split. Use this to read "
                         "pass rates before committing to a 24-48 h run.")
+    p.add_argument("--eval-sentences", type=int, default=400,
+                   help="Sentences withheld from training for the CER target. "
+                        "The 400 default is sized for the merged corpus; on a "
+                        "single small source it is a tenth of the training data.")
     p.add_argument("--calibrate", action="store_true",
                    help="Score every gate instead of stopping at the first failure, "
                         "and write a threshold-calibration report. Much slower; "
@@ -105,8 +109,13 @@ def resolve_sources(raw: str) -> list[str]:
     return keys
 
 
-def finalize(corpus_dir: Path) -> dict:
-    """Resolve gender, cap speakers, split, and export. No audio is touched."""
+def finalize(corpus_dir: Path, eval_sentences: int = 400) -> dict:
+    """Resolve gender, cap speakers, split, and export. No audio is touched.
+
+    `eval_sentences` is the size of the text holdout. The 400 default suits a
+    40 h merged corpus; on a small single-source one it is a tenth of the
+    training data, so the caller should say what it can afford.
+    """
     from pipeline import provenance
     from pipeline.corpus import (
         read_manifest,
@@ -146,7 +155,7 @@ def finalize(corpus_dir: Path) -> dict:
     # reference prompt needs an unseen speaker, the target text needs unseen
     # text, and requiring both of one clip leaves 47 usable clips on the
     # measured corpus shape.
-    reserved = reserve_eval_sentences(records)
+    reserved = reserve_eval_sentences(records, n_sentences=eval_sentences)
     splits = withhold_eval_sentences(speaker_disjoint_split(records), reserved)
     write_eval_sentences(corpus_dir, records, reserved)
 
@@ -176,7 +185,7 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.finalize_only:
-        finalize(args.corpus_dir)
+        finalize(args.corpus_dir, args.eval_sentences)
         return
 
     sources = resolve_sources(args.datasets)
@@ -249,7 +258,7 @@ def main() -> None:
         return
 
     log.info("=" * 60)
-    finalize(args.corpus_dir)
+    finalize(args.corpus_dir, args.eval_sentences)
 
     if not args.no_upload:
         from huggingface_hub import login

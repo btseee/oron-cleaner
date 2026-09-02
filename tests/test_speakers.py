@@ -402,3 +402,27 @@ def test_train_is_never_empty_however_few_speakers():
     for n_speakers in (1, 2, 3, 5):
         records = [clip(f"s{s}", dur=60.0) for s in range(n_speakers) for _ in range(5)]
         assert speaker_disjoint_split(records)["train"], f"{n_speakers} speakers"
+
+
+def test_the_text_holdout_size_is_caller_controlled():
+    """The 400 default is sized for the 40 h merged corpus. On MBSpeech alone
+    (3,846 clips, 3,825 distinct sentences) it would withhold a tenth of the
+    training data, so the caller has to be able to say what it can afford."""
+    import inspect
+
+    import clean_pipeline
+
+    sig = inspect.signature(clean_pipeline.finalize)
+    assert "eval_sentences" in sig.parameters
+    assert sig.parameters["eval_sentences"].default == 400
+
+    records = [
+        {"clip_id": f"c{i}", "text": f"өгүүлбэр {i}", "client_id": "spk",
+         "duration": 6.0, "gender": "male"}
+        for i in range(300)
+    ]
+    from pipeline.speakers import reserve_eval_sentences
+    assert len(reserve_eval_sentences(records, n_sentences=50)) == 50
+    # ...but max_fraction still binds, so a caller cannot withhold the corpus
+    # out from under the training run by asking for too much.
+    assert len(reserve_eval_sentences(records, n_sentences=200)) == 60
