@@ -16,6 +16,12 @@ class ClipResult:
     # rather than only the rate of whichever gate fires first.
     failed_gates: list[str] = field(default_factory=list)
     snr_db: float = 0.0
+    # True when the clip is spoken end to end, leaving under 0.1 s of
+    # non-speech to compute a noise floor from. Recorded rather than
+    # rejected: unmeasurable is not the same as noisy, and DNSMOS-BAK
+    # judges the background directly. Kept in the manifest so a corpus
+    # can be audited for how much of it was never SNR-checked.
+    snr_unmeasurable: bool = False
     mean_f0_hz: float = 0.0
     pitch_confidence: float = 0.0
     dnsmos_sig: float = 0.0

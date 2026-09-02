@@ -355,8 +355,18 @@ class AudioQualityFilter:
         # Untrimmed audio, deliberately: the noise regions are the measurement.
         snr = estimate_snr(audio, timestamps)
         if np.isnan(snr):
-            if not note("snr", "no_silence_to_measure_noise_floor"):
-                return done()
+            # Unmeasurable is not the same as failed. estimate_snr returns NaN
+            # when there is under 0.1 s of non-speech to compute a noise floor
+            # from, which on continuous narration means the clip is spoken end
+            # to end -- a property of the reading, not of the recording.
+            # Rejecting it dropped 41% of a 200-clip MBSpeech sample whose
+            # DNSMOS-BAK was 3.22 at the 5th percentile against a 2.5 floor,
+            # i.e. uniformly clean. It also made the calibration report
+            # self-contradictory: NaN clips counted as rejections but carried
+            # no value into the percentiles, so the same gate read "rejects
+            # 41%" and "keeps 86%".
+            # Defer to DNSMOS-BAK, which measures background noise directly.
+            m["snr_unmeasurable"] = True
         else:
             m["snr_db"] = snr
             if snr < SNR_MIN_DB and not note("snr", f"snr_{snr:.1f}dB"):

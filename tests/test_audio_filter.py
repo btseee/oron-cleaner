@@ -180,3 +180,35 @@ def test_a_rejected_clip_does_not_carry_audio(filt):
     arrive with a usable buffer."""
     result = filt.process_clip(None, "текст")
     assert result.audio_normalized.size == 1
+
+
+def test_unmeasurable_snr_is_not_a_rejection():
+    """estimate_snr returns NaN when there is under 0.1 s of non-speech to
+    compute a noise floor from. On continuous narration that means the clip is
+    spoken end to end -- a property of the reading, not of the recording.
+
+    Treating it as a failure dropped 41% of a 200-clip MBSpeech sample whose
+    DNSMOS-BAK was 3.22 at the 5th percentile against a 2.5 floor. The noise
+    judgement belongs to DNSMOS-BAK, which measures background directly."""
+    import numpy as np
+
+    from pipeline.dsp import estimate_snr
+
+    sr = 24000
+    speech = np.random.default_rng(0).normal(0, 0.1, sr * 2).astype("float32")
+    # Speech covering the whole clip: no non-speech region to measure.
+    wall_to_wall = [{"start": 0, "end": len(speech)}]
+    assert np.isnan(estimate_snr(speech, wall_to_wall, sr)), (
+        "a clip with no silence must report NaN, not a number"
+    )
+
+    src = (ROOT / "pipeline" / "audio_filter.py").read_text(encoding="utf-8")
+    i = src.index("snr = estimate_snr(audio, timestamps)")
+    block = src[i:i + 1400]
+    nan_branch = block[block.index("if np.isnan(snr):"):block.index("else:")]
+    assert 'note("snr"' not in nan_branch, (
+        "an unmeasurable SNR must not be recorded as an SNR rejection"
+    )
+    assert "return done()" not in nan_branch, (
+        "an unmeasurable SNR must not drop the clip before DNSMOS has judged it"
+    )
