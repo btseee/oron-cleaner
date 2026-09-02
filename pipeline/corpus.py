@@ -40,6 +40,11 @@ log = logging.getLogger(__name__)
 # prepare_csv_wavs.py validates this header exactly and rejects anything else.
 F5_HEADER = ["audio_file", "text"]
 
+# Lower case only: coverage is about which sounds the model has seen, and
+# case is orthographic. Spelled out because a naive [a-ya] range is
+# U+0410-U+044F and excludes o U+04E9 and y U+04AF.
+MN_LETTERS_LOWER = "абвгдеёжзийклмноөпрстуүфхцчшщъыьэюя"
+
 
 class CorpusWriter:
     """Append clips to an on-disk corpus, holding no audio in memory."""
@@ -204,6 +209,56 @@ def write_parquet_manifest(root: Path | str, splits: dict[str, list[dict]]) -> P
     return out
 
 
+def text_diversity(splits: dict[str, list[dict]]) -> str:
+    """How much of the language the corpus actually shows the model.
+
+    Audio hours are the number everyone quotes and they say nothing about this.
+    Common Voice mn has 28,858 usable clips over 6,062 distinct sentences --
+    4.76x repetition -- so a corpus can be 40 h and still show the model a
+    narrow slice of Mongolian orthography.
+
+    Character coverage is the floor: a letter that never appears in training
+    cannot be pronounced, and the model has only a barely-trained embedding row
+    for it. Bigram coverage is the more honest measure, since Mongolian
+    phonotactics live in the transitions -- vowel harmony is a constraint
+    between adjacent vowels, not a property of one.
+    """
+    from collections import Counter
+
+    from .speakers import text_key
+
+    texts = [r.get("text") or "" for rs in splits.values() for r in rs]
+    if not texts:
+        return ""
+
+    distinct = len({text_key(t) for t in texts})
+    chars = Counter(c for t in texts for c in t.lower() if c in MN_LETTERS_LOWER)
+    bigrams = Counter(
+        t[i:i + 2].lower() for t in texts for i in range(len(t) - 1)
+        if t[i].lower() in MN_LETTERS_LOWER and t[i + 1].lower() in MN_LETTERS_LOWER
+    )
+    missing = sorted(set(MN_LETTERS_LOWER) - set(chars))
+    # A letter seen a handful of times is nearly as bad as one never seen: the
+    # model cannot learn its realisation from a dozen examples.
+    rare = sorted(c for c, n in chars.items() if n < 100)
+
+    lines = [
+        "Text diversity:",
+        f"  clips                 {len(texts):,}",
+        f"  distinct sentences    {distinct:,}  "
+        f"({len(texts) / max(1, distinct):.2f}x repetition)",
+        f"  letters covered       {len(chars)}/{len(MN_LETTERS_LOWER)}",
+        f"  letter bigrams        {len(bigrams):,} distinct",
+    ]
+    if missing:
+        lines.append(f"  NEVER APPEARS         {' '.join(missing)}")
+    if rare:
+        lines.append(f"  under 100 occurrences {' '.join(rare)}")
+    if not missing and not rare:
+        lines.append("  every Mongolian letter appears at least 100 times")
+    return "\n".join(lines)
+
+
 def _per_source_cer(splits: dict[str, list[dict]]) -> str:
     """CER by source, because the gate's scorer is not neutral between them.
 
@@ -260,7 +315,7 @@ def summarise(splits: dict[str, list[dict]]) -> str:
         total_h += h
         lines.append(f"{name:<12}{len(rs):>8,}{h:>9.1f}{spk:>10}{mh:>9.1f}{fh:>10.1f}")
 
-    lines += ["", _per_source_cer(splits)]
+    lines += ["", text_diversity(splits), "", _per_source_cer(splits)]
 
     male_speakers = len({
         str(r.get("client_id")) for rs in splits.values() for r in rs

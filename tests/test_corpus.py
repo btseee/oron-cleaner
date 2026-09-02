@@ -149,3 +149,49 @@ def test_summary_fails_a_thin_male_corpus():
     text = summarise(splits)
     assert "male  >= 5 h             FAIL" in text
     assert "male speakers >= 3       FAIL" in text
+
+
+# ── text diversity ────────────────────────────────────────────────────────────
+
+def test_diversity_reports_sentence_repetition():
+    """Audio hours say nothing about this: Common Voice mn is 28,858 clips over
+    6,062 distinct sentences, so a 40 h corpus can still show the model a narrow
+    slice of the orthography."""
+    from pipeline.corpus import text_diversity
+
+    splits = {"train": [{"text": "нэг өгүүлбэр"}] * 4 + [{"text": "өөр өгүүлбэр"}]}
+    out = text_diversity(splits)
+    assert "distinct sentences    2" in out
+    assert "2.50x repetition" in out
+
+
+def test_diversity_names_letters_that_never_appear():
+    """A letter absent from training cannot be pronounced, and the model has
+    only a barely-trained embedding row for it."""
+    from pipeline.corpus import text_diversity
+
+    out = text_diversity({"train": [{"text": "аб"}]})
+    assert "NEVER APPEARS" in out
+    assert "ө" in out.split("NEVER APPEARS")[1]
+
+
+def test_diversity_counts_the_two_letters_a_naive_range_would_miss():
+    """A [а-я] range is U+0410-U+044F and excludes ө U+04E9 and ү U+04AF."""
+    from pipeline.corpus import text_diversity
+
+    out = text_diversity({"train": [{"text": "өү"}]})
+    assert "letters covered       2/35" in out
+
+
+def test_diversity_ignores_case_and_punctuation():
+    from pipeline.corpus import text_diversity
+
+    a = text_diversity({"train": [{"text": "Сайн."}]})
+    b = text_diversity({"train": [{"text": "сайн"}]})
+    assert a.split("letters covered")[1] == b.split("letters covered")[1]
+
+
+def test_diversity_on_an_empty_corpus_says_nothing_rather_than_crashing():
+    from pipeline.corpus import text_diversity
+
+    assert text_diversity({"train": []}) == ""

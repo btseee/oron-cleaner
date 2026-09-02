@@ -84,7 +84,8 @@ output/oron_mn_strict/
   eval_sentences.txt        400 sentences no training clip contains — the CER text
   manifest.parquet          per-clip metrics and speaker metadata
   manifest.jsonl            the same rows, plus split and gender_resolved
-  corpus_summary.txt        hours, speakers, and the acceptance criteria
+  corpus_summary.txt        hours, speakers, acceptance criteria, text
+                            diversity, and CER by source
   provenance.json           pinned revisions, package versions, content hash
 ```
 
