@@ -7,8 +7,6 @@ import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import requests
-
 from ..constants import OUTPUT_DIR
 from ..corpus import CorpusWriter
 from ..processor import process_split
@@ -21,6 +19,9 @@ if TYPE_CHECKING:
     from ..audio_filter import AudioQualityFilter
     from ..calibrate import Calibration
 
+# `requests` is imported in the two functions that download. Nothing else
+# here needs it, and CI -- which installs no network stack -- reads this
+# module to test the TSV parsing.
 log = logging.getLogger(__name__)
 
 # Common Voice Scripted Speech 26.0 - Mongolian (CC0-1.0, 2.87 GB, MP3).
@@ -77,6 +78,8 @@ class _CvSplit:
 
 
 def _get_download_url(api_key: str) -> str:
+    import requests
+
     resp = requests.post(
         _API_URL,
         headers={
@@ -99,6 +102,8 @@ def _get_download_url(api_key: str) -> str:
 
 
 def _download_archive(api_key: str) -> Path:
+    import requests
+
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = _CACHE_DIR / f"{_DATASET_NAME}-mn.tar.gz"
 

@@ -28,7 +28,6 @@ import logging
 import re
 
 import numpy as np
-import torch
 
 from .constants import SAMPLE_RATE
 
@@ -67,6 +66,8 @@ class ForcedAligner:
         passing number when a stage cannot run is how the old SNR gate let
         digitally silent clips through.
         """
+        import torch
+
         words = self.romanize(text)
         if not words:
             return float("nan")

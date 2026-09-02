@@ -17,8 +17,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from datasets import load_dataset
-
 from ..corpus import CorpusWriter
 from ..processor import process_split
 from ..provenance import PINNED_REVISIONS
@@ -30,6 +28,12 @@ from ..stats import CleaningStats
 if TYPE_CHECKING:
     from ..audio_filter import AudioQualityFilter
     from ..calibrate import Calibration
+
+# `datasets` is imported inside the loader, not here. This module's own
+# comment below says a process that merely wants to inspect a loader should
+# not pull the model stack -- and importing `datasets` at module scope broke
+# exactly that, taking four test files down with it in an environment that
+# has no model stack installed.
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +73,8 @@ def process_mbspeech(
     limit: int | None = None,
     calibration: Calibration | None = None,
 ) -> CleaningStats:
+    from datasets import load_dataset
+
     log.info("Loading MBSpeech Mongolian …")
     ds = load_dataset("btsee/mbspeech_mn", revision=PINNED_REVISIONS["btsee/mbspeech_mn"])
 

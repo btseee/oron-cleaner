@@ -27,8 +27,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from datasets import load_dataset
-
 from ..calibrate import Calibration
 from ..corpus import CorpusWriter
 from ..processor import process_split
@@ -40,6 +38,9 @@ from ..stats import CleaningStats
 if TYPE_CHECKING:
     from ..audio_filter import AudioQualityFilter
 
+# `datasets` is imported inside the loader, not here: a process that only
+# wants to inspect this module should not need the model stack, and an
+# eager import broke four test files in an environment without one.
 log = logging.getLogger(__name__)
 
 LICENCE = "CC-BY-NC-4.0"
@@ -85,6 +86,8 @@ def process_worldspeech(
 
     log.warning("Including WorldSpeech (%s) — the resulting model is NOT "
                 "commercially usable.", LICENCE)
+    from datasets import load_dataset
+
     ws = load_dataset("disco-eth/WorldSpeech", "mn_mn")
 
     all_stats = CleaningStats("worldspeech_mn")
