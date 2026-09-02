@@ -81,6 +81,7 @@ class CleaningStats:
             "dnsmos":    "Rejected — DNSMOS too low:  ",
             "alignment": "Rejected — forced alignment:",
             "cer":       "Rejected — sentence verify: ",
+            "normalize": "Rejected — text normalise: ",
             "crash":     "Rejected — processing crash:",
         }
         for stage, label in stage_labels.items():

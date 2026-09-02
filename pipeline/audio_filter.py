@@ -30,15 +30,14 @@ from __future__ import annotations
 
 import logging
 
-import jiwer
 import librosa
 import numpy as np
-import torch
-import torchaudio
 from oron_tts.text import MongolianNormalizer
-from silero_vad import get_speech_timestamps, load_silero_vad
-from torchmetrics.audio.dnsmos import DeepNoiseSuppressionMeanOpinionScore
 
+# The model stack is imported where it is used, not here. It costs roughly 3 GB
+# and a GPU, while every gate decision in `process_clip` is ordinary Python --
+# so importing this module to read or test that logic should not require any of
+# it. Same reason `checkpoint.py` defers torch and `upload.py` defers HfApi.
 from .alignment import ForcedAligner
 from .clip_result import ClipResult
 from .constants import (
@@ -90,6 +89,8 @@ class AudioQualityFilter:
         self._normalizer = MongolianNormalizer()
 
         log.info("Loading Silero VAD …")
+        from silero_vad import load_silero_vad
+
         self._vad_model = load_silero_vad()
 
         log.info("Loading %s …", ASR_MODEL)
@@ -106,6 +107,8 @@ class AudioQualityFilter:
         self._aligner = ForcedAligner(device=device)
 
         log.info("Loading DNSMOS …")
+        from torchmetrics.audio.dnsmos import DeepNoiseSuppressionMeanOpinionScore
+
         self._dnsmos = DeepNoiseSuppressionMeanOpinionScore(
             fs=SAMPLE_RATE, personalized=False
         ).to(device)
@@ -132,6 +135,8 @@ class AudioQualityFilter:
 
     def _load_audio(self, audio_input) -> tuple[np.ndarray | None, str]:
         """Accept a HuggingFace Audio dict, a torchcodec decoder, or a path."""
+        import torchaudio
+
         try:
             if isinstance(audio_input, dict):
                 arr = np.array(audio_input["array"], dtype=np.float32)
@@ -162,6 +167,9 @@ class AudioQualityFilter:
         Returns (trimmed audio, speech timestamps on the ORIGINAL audio, reason).
         The timestamps are returned so SNR can find the real noise regions.
         """
+        import torch
+        from silero_vad import get_speech_timestamps
+
         tensor = torch.from_numpy(audio).float()
         try:
             timestamps = get_speech_timestamps(
@@ -194,6 +202,8 @@ class AudioQualityFilter:
     # ── Stage 8 ── DNSMOS ─────────────────────────────────────────────────
 
     def _score_dnsmos(self, audio: np.ndarray) -> tuple[bool, dict[str, float], str]:
+        import torch
+
         try:
             tensor = torch.tensor(audio, dtype=torch.float32).to(self.device)
             with torch.no_grad():
@@ -214,6 +224,8 @@ class AudioQualityFilter:
     # ── Stage 9 ── Transcript agreement ───────────────────────────────────
 
     def _transcribe(self, audio: np.ndarray) -> str:
+        import torch
+
         inputs = self._asr_processor(
             audio, sampling_rate=SAMPLE_RATE, return_tensors="pt"
         ).to(self.device)
@@ -225,6 +237,8 @@ class AudioQualityFilter:
         self, audio: np.ndarray, ground_truth: str
     ) -> tuple[bool, float, float, str, str]:
         """Returns (passed, cer, length_ratio, asr_text, reject_reason)."""
+        import jiwer
+
         # Normalise the ground truth exactly as training will see it, so digits
         # and abbreviations cannot inflate CER. Previously "1990 онд" was scored
         # against "мянга есөн зуун ерэн онд" and rejected as a mismatch.

@@ -1,0 +1,182 @@
+"""The gate cascade in `process_clip`.
+
+M7: the two functions that actually build the corpus had no tests, only the
+pure helpers they call. `process_split` is covered in test_processor.py; this
+covers the other one.
+
+`AudioQualityFilter.__init__` loads roughly 3 GB of models, so the instance is
+built without it and the seven methods `process_clip` uses are stubbed. What is
+under test is the cascade -- ordering, short-circuiting, which failure is
+reported, and the calibration mode that must *not* short-circuit -- none of
+which is about the models.
+"""
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from pipeline.audio_filter import AudioQualityFilter  # noqa: E402
+from pipeline.constants import (  # noqa: E402
+    DNSMOS_MIN_OVR,
+    MAX_DURATION_S,
+    MIN_DURATION_S,
+    SAMPLE_RATE,
+)
+
+
+def _speech(seconds: float = 5.0) -> np.ndarray:
+    """Tone in the middle, near-silence at the edges.
+
+    The silence is load-bearing: SNR is measured against the *true* non-speech
+    regions, so a buffer that is speech end to end has no noise floor and is
+    rejected -- correctly, and it is the code saying so, not the stub.
+    """
+    # Broadband, not a tone: the bandwidth gate wants a lowpass shelf above
+    # 6 kHz, and a 180 Hz sine measures 211 Hz -- rejected, correctly, by the
+    # code rather than by the stub.
+    n = int(seconds * SAMPLE_RATE)
+    audio = (0.2 * np.random.default_rng(0).standard_normal(n)).astype(np.float32)
+    edge = n // 10
+    audio[:edge] *= 0.001
+    audio[-edge:] *= 0.001
+    return audio
+
+
+def _speech_bounds(audio: np.ndarray) -> list[dict]:
+    edge = len(audio) // 10
+    return [{"start": edge, "end": len(audio) - edge}]
+
+
+@pytest.fixture
+def filt():
+    """A filter with no models: every stage answers "fine" until a test says
+    otherwise, so each test changes exactly one thing."""
+    f = object.__new__(AudioQualityFilter)
+    f.calls = []
+
+    def load(audio_input):
+        f.calls.append("load")
+        return (audio_input, "") if audio_input is not None else (None, "decode_failed")
+
+    def vad(audio):
+        f.calls.append("vad")
+        # Silero's shape, which dsp.speech_ratio indexes by name -- a tuple here
+        # passed the stub and failed the code, which is the wrong way round.
+        return audio, _speech_bounds(audio), ""
+
+    def dnsmos(audio):
+        f.calls.append("dnsmos")
+        # (ok, scores, reason) -- the signature's order, not (ok, reason, scores).
+        return True, {"dnsmos_sig": 4.0, "dnsmos_bak": 4.0,
+                      "dnsmos_ovr": DNSMOS_MIN_OVR + 0.5, "dnsmos_p808": 4.0}, ""
+
+    def verify(audio, text):
+        f.calls.append("verify")
+        return True, 0.05, 1.0, "тест", ""
+
+    f._load_audio = load
+    f._run_vad = vad
+    f._score_dnsmos = dnsmos
+    f._verify_reading = verify
+    class _Aligner:
+        def score(self, audio, text):
+            f.calls.append("align")
+            return 0.95
+
+    from oron_tts.text import MongolianNormalizer
+
+    f._prepare_output_audio = lambda a: np.asarray(a, dtype=np.float32)
+    f._aligner = _Aligner()
+    f._normalizer = MongolianNormalizer()
+    return f
+
+
+# ── the happy path ────────────────────────────────────────────────────────────
+
+def test_a_clean_clip_passes_and_carries_its_audio(filt):
+    result = filt.process_clip(_speech(), "Сайн байна уу")
+    assert result.passed
+    assert result.reject_stage == ""
+    assert result.audio_normalized.size > 1
+
+
+# ── short-circuiting ──────────────────────────────────────────────────────────
+
+def test_a_load_failure_stops_before_anything_else_runs(filt):
+    """The 24-48 h pass is bounded by how early it can stop."""
+    result = filt.process_clip(None, "текст")
+    assert not result.passed
+    assert result.reject_stage == "load"
+    assert filt.calls == ["load"]
+
+
+def test_a_short_clip_never_reaches_the_models(filt):
+    result = filt.process_clip(_speech(MIN_DURATION_S / 2), "текст")
+    assert result.reject_stage == "duration"
+    assert "vad" not in filt.calls and "dnsmos" not in filt.calls
+
+
+def test_a_long_clip_is_rejected_too(filt):
+    """DynamicBatchSampler silently drops anything over the frame budget, so a
+    long clip that survives here disappears later with nothing logged."""
+    result = filt.process_clip(_speech(MAX_DURATION_S + 5), "текст")
+    assert result.reject_stage == "duration"
+
+
+def test_the_first_failure_is_the_one_reported(filt):
+    """So the rejection log says which gate to loosen."""
+    result = filt.process_clip(_speech(0.1), "текст")
+    assert result.reject_stage == "duration"
+    assert result.reject_reason.startswith("too_short")
+
+
+# ── calibration mode ──────────────────────────────────────────────────────────
+
+def test_measure_all_scores_every_gate_instead_of_stopping(filt):
+    """The whole point of --calibrate: in a normal run a clip rejected for
+    duration is never scored for DNSMOS, so the per-gate rates are not
+    comparable."""
+    result = filt.process_clip(_speech(MIN_DURATION_S / 2), "текст", measure_all=True)
+    assert not result.passed
+    assert "dnsmos" in filt.calls
+    assert "verify" in filt.calls
+
+
+def test_measure_all_records_every_failure_not_just_the_first(filt):
+    def bad_dnsmos(audio):
+        filt.calls.append("dnsmos")
+        return False, {"dnsmos_sig": 1.0, "dnsmos_bak": 1.0,
+                       "dnsmos_ovr": 1.0, "dnsmos_p808": 1.0}, "ovr_1.0"
+
+    filt._score_dnsmos = bad_dnsmos
+    result = filt.process_clip(_speech(0.1), "текст", measure_all=True)
+    stages = {g.split(":")[0] for g in result.failed_gates}
+    assert {"duration", "dnsmos"} <= stages
+
+
+def test_a_vad_failure_is_terminal_even_in_calibration_mode(filt):
+    """Without speech bounds there is nothing downstream can measure, so this
+    one cannot be scored past."""
+    def no_speech(audio):
+        filt.calls.append("vad")
+        return None, [], "no_speech_detected"
+
+    filt._run_vad = no_speech
+    result = filt.process_clip(_speech(), "текст", measure_all=True)
+    assert result.reject_stage == "vad"
+    assert "dnsmos" not in filt.calls
+
+
+# ── a failing clip carries no audio ──────────────────────────────────────────
+
+def test_a_rejected_clip_does_not_carry_audio(filt):
+    """`CorpusWriter.add` writes whatever it is handed; a rejected clip must not
+    arrive with a usable buffer."""
+    result = filt.process_clip(None, "текст")
+    assert result.audio_normalized.size == 1
