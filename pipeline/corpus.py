@@ -204,6 +204,41 @@ def write_parquet_manifest(root: Path | str, splits: dict[str, list[dict]]) -> P
     return out
 
 
+def _per_source_cer(splits: dict[str, list[dict]]) -> str:
+    """CER by source, because the gate's scorer is not neutral between them.
+
+    `bayartsogt/wav2vec2-large-xlsr-mongolian` is, per its own model card,
+    fine-tuned on Common Voice Mongolian -- and it is both the corpus's CER gate
+    and the evaluation scorer. So it has seen Common Voice's speakers and
+    sentences and has not seen FLEURS' or MBSpeech's: the gate is systematically
+    lenient on one source and strict on the others, which biases corpus
+    composition by source rather than by quality.
+
+    That cannot be fixed with a threshold. It can be *seen*: if Common Voice's
+    median CER sits well below the others on audio of comparable quality, the
+    gap is the contamination, not the recording.
+    """
+    import statistics
+
+    by_source: dict[str, list[float]] = {}
+    for rs in splits.values():
+        for r in rs:
+            source = str(r.get("clip_id", "")).split("_")[0] or "?"
+            cer = r.get("cer")
+            if cer is not None:
+                by_source.setdefault(source, []).append(float(cer))
+    if not by_source:
+        return ""
+
+    out = ["CER by source (the gate's recogniser trained on Common Voice):",
+           f"  {'source':<12}{'clips':>8}{'median':>9}{'mean':>8}"]
+    for source, values in sorted(by_source.items()):
+        out.append(f"  {source:<12}{len(values):>8}{statistics.median(values):>9.3f}"
+                   f"{statistics.fmean(values):>8.3f}")
+    out.append("  A markedly lower median for cv is contamination, not quality.")
+    return "\n".join(out)
+
+
 def summarise(splits: dict[str, list[dict]]) -> str:
     """Human-readable corpus summary, including the acceptance criteria."""
     lines = ["=== Corpus summary ===", ""]
@@ -224,6 +259,8 @@ def summarise(splits: dict[str, list[dict]]) -> str:
         total_female += fh
         total_h += h
         lines.append(f"{name:<12}{len(rs):>8,}{h:>9.1f}{spk:>10}{mh:>9.1f}{fh:>10.1f}")
+
+    lines += ["", _per_source_cer(splits)]
 
     male_speakers = len({
         str(r.get("client_id")) for rs in splits.values() for r in rs
