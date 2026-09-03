@@ -78,6 +78,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--finalize-only", action="store_true",
                    help="Re-run splitting and export from the existing manifest")
     p.add_argument("--no-upload", action="store_true", help="Skip the HuggingFace push")
+    p.add_argument("--repo", default=None,
+                   help="HuggingFace dataset repo to publish to. Defaults to "
+                        "the merged-corpus repo; set it when publishing a single "
+                        "source under its own name, which is a different artifact.")
     p.add_argument("--limit", type=int, default=None,
                    help="Process only the first N clips per split. Use this to read "
                         "pass rates before committing to a 24-48 h run.")
@@ -266,7 +270,10 @@ def main() -> None:
         from pipeline.upload import upload_corpus
 
         login(token=args.hf_token)
-        upload_corpus(args.corpus_dir)
+        if args.repo:
+            upload_corpus(args.corpus_dir, repo_id=args.repo)
+        else:
+            upload_corpus(args.corpus_dir)
 
     log.info("Done.")
 
