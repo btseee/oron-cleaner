@@ -73,10 +73,11 @@ def process_mbspeech(
     limit: int | None = None,
     calibration: Calibration | None = None,
 ) -> CleaningStats:
-    from datasets import load_dataset
+    from ._load import load_hub_dataset
 
     log.info("Loading MBSpeech Mongolian …")
-    ds = load_dataset("btsee/mbspeech_mn", revision=PINNED_REVISIONS["btsee/mbspeech_mn"])
+    ds = load_hub_dataset("btsee/mbspeech_mn",
+                          revision=PINNED_REVISIONS["btsee/mbspeech_mn"])
 
     all_stats = CleaningStats("mbspeech_mn")
     for split_name in ds:

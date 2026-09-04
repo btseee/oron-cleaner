@@ -82,10 +82,11 @@ def process_fleurs(
     limit: int | None = None,
     calibration: Calibration | None = None,
 ) -> CleaningStats:
-    from datasets import load_dataset
+    from ._load import load_hub_dataset
 
     log.info("Loading FLEURS Mongolian …")
-    fleurs = load_dataset("google/fleurs", "mn_mn", revision=PINNED_REVISIONS["google/fleurs"])
+    fleurs = load_hub_dataset("google/fleurs", "mn_mn",
+                              revision=PINNED_REVISIONS["google/fleurs"])
 
     all_stats = CleaningStats("fleurs_mn")
     for split_name in fleurs:

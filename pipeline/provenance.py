@@ -35,6 +35,7 @@ PINNED_REVISIONS: dict[str, str] = {
     "bayartsogt/wav2vec2-large-xlsr-mongolian": "b615fb8829bce4a3921bc2f2b9984e894f192951",
     "google/fleurs": "70bb2e84b976b7e960aa89f1c648e09c59f894dd",
     "btsee/mbspeech_mn": "becae86f72f7070091a5265977b697c905c08b11",
+    "disco-eth/WorldSpeech": "7fc2c2f19528b3d3972110a04e500098f6fc7f24",
 }
 
 _TRACKED_PACKAGES = (

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from ..calibrate import Calibration
 from ..corpus import CorpusWriter
 from ..processor import process_split
+from ..provenance import PINNED_REVISIONS
 from ..stats import CleaningStats
 
 # AudioQualityFilter is only referenced as a type here. Importing it at
@@ -86,9 +87,10 @@ def process_worldspeech(
 
     log.warning("Including WorldSpeech (%s) — the resulting model is NOT "
                 "commercially usable.", LICENCE)
-    from datasets import load_dataset
+    from ._load import load_hub_dataset
 
-    ws = load_dataset("disco-eth/WorldSpeech", "mn_mn")
+    ws = load_hub_dataset("disco-eth/WorldSpeech", "mn_mn",
+                          revision=PINNED_REVISIONS["disco-eth/WorldSpeech"])
 
     all_stats = CleaningStats("worldspeech_mn")
     for split_name in ws:

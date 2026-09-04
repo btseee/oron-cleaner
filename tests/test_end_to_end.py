@@ -158,8 +158,12 @@ def test_preflight_accepts_the_vocabulary_the_build_installs(corpus, tmp_path):
 
 
 def test_preflight_refuses_the_shipped_epochs_for_this_corpus(corpus, tmp_path):
-    """The placeholder is computed for a corpus that does not exist, so it must
-    fail against any real one rather than quietly setting a wrong LR decay."""
+    """An epoch count carried over from another corpus must be refused.
+
+    `epochs` sets the LR decay horizon, so a stale value does not fail loudly --
+    it trains on the wrong schedule. The shipped config therefore holds the
+    string `PLACEHOLDER`, which cannot be mistaken for a number; this substitutes
+    a plausible one and checks preflight still refuses it."""
     import yaml
 
     data = tmp_path / "oron_mn_pinyin"
@@ -169,7 +173,8 @@ def test_preflight_refuses_the_shipped_epochs_for_this_corpus(corpus, tmp_path):
     (data / "duration.json").write_text(json.dumps({"duration": durations}),
                                         encoding="utf-8")
     config = yaml.safe_load(
-        (ORON_TTS / "configs" / "f5tts_mn.yaml").read_text(encoding="utf-8")
+        (ORON_TTS / "configs" / "oron.yaml").read_text(encoding="utf-8")
+        .replace("epochs: PLACEHOLDER", "epochs: 51")
     )
     problems: list[str] = []
     check_epochs(config, data, problems, [])
