@@ -88,3 +88,31 @@ class ForcedAligner:
 
         scores = [s.score for span in spans for s in span]
         return float(np.mean(scores)) if scores else float("nan")
+
+    def word_scores(self, audio: np.ndarray, text: str) -> list[float]:
+        """Per-word alignment score, in transcript order. Empty if unalignable.
+
+        `score()` averages these away, which is what a gate needs but not what
+        trimming needs: a transcript that runs past the end of its audio shows
+        up as a collapse in the LAST words, and the mean only says the clip is
+        slightly worse overall. Returning the sequence lets a caller find where
+        the audio stops supporting the text.
+        """
+        import torch
+
+        words = self.romanize(text)
+        if not words or audio.size < SAMPLE_RATE // 10:
+            return []
+        waveform = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).to(self.device)
+        try:
+            with torch.inference_mode():
+                emission, _ = self._model(waveform)
+                spans = self._aligner(emission[0], self._tokenizer(words))
+        except Exception as exc:
+            log.debug("alignment failed: %s", exc)
+            return []
+        out = []
+        for span in spans:
+            sub = [s.score for s in span]
+            out.append(float(np.mean(sub)) if sub else 0.0)
+        return out

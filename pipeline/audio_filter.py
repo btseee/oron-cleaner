@@ -70,6 +70,7 @@ from .dsp import (
     reading_passes,
 )
 from .provenance import PINNED_REVISIONS
+from .trimming import trim_to_audio
 
 log = logging.getLogger(__name__)
 
@@ -397,6 +398,20 @@ class AudioQualityFilter:
         except Exception as exc:
             note("alignment", f"normalize_error:{exc}")
             return done()
+
+        # Cut the transcript back to the span the audio supports, BEFORE the
+        # gates score it. WorldSpeech segments run past the end of their audio
+        # -- 80% of clips that passed had audio shorter than their text and 53%
+        # ended mid-word -- and no threshold fixes a transcript that is simply
+        # longer than the recording. A clip that already aligns is untouched, so
+        # this is safe on every source.
+        trim = trim_to_audio(self._aligner, trimmed, norm_gt)
+        if trim.trimmed:
+            norm_gt = trim.text
+            ground_truth_text = trim.text
+            m["text_trimmed"] = True
+            m["text_discarded"] = trim.discarded
+            m["words_removed"] = trim.words_removed
 
         align = self._aligner.score(trimmed, norm_gt)
         if np.isnan(align):

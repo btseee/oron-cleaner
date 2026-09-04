@@ -22,6 +22,12 @@ class ClipResult:
     # judges the background directly. Kept in the manifest so a corpus
     # can be audited for how much of it was never SNR-checked.
     snr_unmeasurable: bool = False
+    # Set when the transcript was cut back to the span the audio supports.
+    # Recorded, not silent: a corpus must be auditable for how much text was
+    # removed and what it was.
+    text_trimmed: bool = False
+    text_discarded: str = ""
+    words_removed: int = 0
     mean_f0_hz: float = 0.0
     pitch_confidence: float = 0.0
     dnsmos_sig: float = 0.0
