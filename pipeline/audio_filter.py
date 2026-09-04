@@ -90,9 +90,21 @@ class AudioQualityFilter:
         self._normalizer = MongolianNormalizer()
 
         log.info("Loading Silero VAD …")
+        # `import silero_vad` calls torch.set_num_threads(1) at module scope, and
+        # that clamp is process-wide and permanent -- every torch CPU op for the
+        # rest of the run inherits it. Measured on a 48-core node: 48 threads
+        # before the import, 1 after, and MBSpeech cleaning fell from ~46 clips
+        # a minute to 7.7. VAD itself wants one thread; nothing else does.
+        import torch
+
+        threads_before = torch.get_num_threads()
         from silero_vad import load_silero_vad
 
         self._vad_model = load_silero_vad()
+        if torch.get_num_threads() != threads_before:
+            log.info("silero_vad set torch threads to %d; restoring %d",
+                     torch.get_num_threads(), threads_before)
+            torch.set_num_threads(threads_before)
 
         log.info("Loading %s …", ASR_MODEL)
         from transformers import AutoModelForCTC, AutoProcessor
