@@ -1,9 +1,10 @@
-"""Silero must not leave torch single-threaded for the rest of the run.
+"""Torch stays on one CPU thread, whatever silero_vad happens to do.
 
-`import silero_vad` calls `torch.set_num_threads(1)` at module scope. The clamp
-is process-wide and permanent, so every later torch CPU op -- resampling,
-DNSMOS, the CTC forward on CPU -- inherits it. Measured on a 48-core node,
-MBSpeech cleaning ran at 7.7 clips a minute instead of ~46.
+`import silero_vad` sets it to 1 as a side effect. Relying on that would make
+the pipeline's speed depend on an unrelated library's internals, and an earlier
+attempt to "fix" the side effect by restoring the previous count made alignment
+twelve times slower: 0.84 s per 6 s clip on 48 threads against 0.07 s on one.
+So the count is set deliberately, and this test pins it.
 """
 from __future__ import annotations
 
@@ -15,16 +16,15 @@ import torch
 import pipeline.audio_filter as af
 
 
-def test_filter_restores_the_thread_count(monkeypatch):
+def test_filter_pins_torch_to_one_thread(monkeypatch):
     before = torch.get_num_threads()
-    target = max(4, before)
-    torch.set_num_threads(target)
+    torch.set_num_threads(max(4, before))
 
-    # A silero_vad whose import clamps threads, exactly like the real one.
+    # A silero_vad that does NOT clamp, so the test proves the filter sets the
+    # count itself rather than inheriting someone else's side effect.
     fake = types.ModuleType("silero_vad")
 
     def load_silero_vad(*a, **k):
-        torch.set_num_threads(1)
         return object()
 
     fake.load_silero_vad = load_silero_vad
@@ -55,7 +55,7 @@ def test_filter_restores_the_thread_count(monkeypatch):
         raise AssertionError("__init__ did not reach the ASR load; test is not "
                              "exercising the path it claims to")
 
-    assert torch.get_num_threads() == target, (
-        "silero left torch at %d threads; the whole pipeline runs single-threaded"
-        % torch.get_num_threads())
+    assert torch.get_num_threads() == af.TORCH_THREADS == 1, (
+        "torch is on %d threads; measured, that makes alignment up to twelve "
+        "times slower" % torch.get_num_threads())
     torch.set_num_threads(before)

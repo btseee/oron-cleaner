@@ -14,6 +14,13 @@ import json
 from pathlib import Path
 
 SAMPLE_RATE: int = 16_000
+
+# Torch CPU threads. One, measured: an MMS_FA alignment of a 6 s clip takes
+# 0.07 s on one thread, 0.13 s on eight and 0.84 s on forty-eight. The
+# sequences are short enough that thread synchronisation dominates, and on
+# a shared node the oversubscription competes with every other tenant.
+TORCH_THREADS: int = 1
+
 OUTPUT_SAMPLE_RATE: int = 24_000
 
 OUTPUT_DIR: Path = Path("output")

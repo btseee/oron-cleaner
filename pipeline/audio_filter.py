@@ -41,6 +41,7 @@ from oron_tts.text import MongolianNormalizer
 from .alignment import ForcedAligner
 from .clip_result import ClipResult
 from .constants import (
+    TORCH_THREADS,
     DNSMOS_MIN_BAK,
     DNSMOS_MIN_OVR,
     DNSMOS_MIN_SIG,
@@ -90,21 +91,30 @@ class AudioQualityFilter:
         self._normalizer = MongolianNormalizer()
 
         log.info("Loading Silero VAD …")
-        # `import silero_vad` calls torch.set_num_threads(1) at module scope, and
-        # that clamp is process-wide and permanent -- every torch CPU op for the
-        # rest of the run inherits it. Measured on a 48-core node: 48 threads
-        # before the import, 1 after, and MBSpeech cleaning fell from ~46 clips
-        # a minute to 7.7. VAD itself wants one thread; nothing else does.
+        # `import silero_vad` calls torch.set_num_threads(1) at module scope and
+        # the clamp is process-wide. That looks like a bug to inherit, and an
+        # earlier version of this file "fixed" it by restoring the previous
+        # count. It made the pipeline twelve times slower.
+        #
+        # Measured, one MMS_FA alignment of a 6 s clip on a 48-core EPYC 7642:
+        #
+        #     48 threads   0.84 s
+        #      8 threads   0.13 s
+        #      1 thread    0.07 s
+        #
+        # These are short sequences. Splitting them across many cores costs far
+        # more in synchronisation than it recovers, and on a shared node the
+        # oversubscription competes with every other tenant. One thread is not a
+        # limitation here, it is the fast path -- so it is set deliberately and
+        # kept, rather than left to a side effect of an unrelated import.
         import torch
 
-        threads_before = torch.get_num_threads()
         from silero_vad import load_silero_vad
 
         self._vad_model = load_silero_vad()
-        if torch.get_num_threads() != threads_before:
-            log.info("silero_vad set torch threads to %d; restoring %d",
-                     torch.get_num_threads(), threads_before)
-            torch.set_num_threads(threads_before)
+        torch.set_num_threads(TORCH_THREADS)
+        log.info("torch CPU threads pinned to %d (measured optimum for these "
+                 "short sequences)", torch.get_num_threads())
 
         log.info("Loading %s …", ASR_MODEL)
         from transformers import AutoModelForCTC, AutoProcessor
