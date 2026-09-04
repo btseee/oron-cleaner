@@ -37,6 +37,9 @@ dependencies = [
     "huggingface_hub>=1.16.1",
     "jiwer>=4.0.0",
     "numpy>=2.0.0",
+    # packaging.py writes the published corpus as parquet; without it the
+    # upload falls back to nothing and the dataset cannot be published.
+    "pyarrow>=17.0.0",
     # Mongolian text normalisation, shared with oron-tts so the text published in
     # the corpus, scored for CER, and used for training is one string. Pure
     # stdlib, so this pulls nothing extra. Install it first:

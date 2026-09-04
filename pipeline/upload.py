@@ -267,10 +267,30 @@ def upload_corpus(corpus_dir: Path | str, repo_id: str = REPO_ID) -> None:
     card = corpus_dir / "README.md"
     card.write_text(build_card(corpus_dir), encoding="utf-8")
 
-    log.info("Uploading %s … (this transfers the whole corpus)", corpus_dir)
-    api.upload_large_folder(
-        folder_path=str(corpus_dir),
-        repo_id=repo_id,
-        repo_type="dataset",
-    )
+    # Pack before uploading. Sending the corpus directory as-is means one HTTP
+    # request per clip -- which blew the Hub's 1000-per-5-minutes quota at 15k
+    # clips, landing 9,994 wavs and neither the card nor the metadata -- and
+    # leaves a dataset the viewer cannot read, because it does not join a
+    # manifest to a directory of wavs.
+    import shutil
+    import tempfile
+
+    from .packaging import pack_corpus
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stage = Path(tmp) / "stage"
+        (stage / "data").mkdir(parents=True)
+        counts = pack_corpus(corpus_dir, stage / "data")
+        for name in ("README.md", "manifest.jsonl", "corpus_summary.txt",
+                     "provenance.json", "eval_sentences.txt"):
+            if (corpus_dir / name).is_file():
+                shutil.copy(corpus_dir / name, stage / name)
+        n_files = sum(1 for _ in stage.rglob("*") if _.is_file())
+        log.info("Uploading %d files (%s clips) …", n_files, counts)
+        api.upload_folder(
+            folder_path=str(stage),
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message="Cleaned corpus as parquet with full metadata columns",
+        )
     log.info("Uploaded: https://huggingface.co/datasets/%s", repo_id)
