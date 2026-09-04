@@ -10,6 +10,13 @@ That makes it the cleanest male audio available, and Common Voice only has
 
 A loader was missing entirely even though `btsee/mbspeech_mn` was oron-tts's
 default training dataset.
+
+**The raw mirror no longer exists.** `btsee/mbspeech_mn` was deleted once the
+cleaned corpus was published, so this loader cannot run and there is nothing to
+re-clean from. `btsee/mbspeech-mn` holds the cleaned result -- 2,995 clips,
+5.40 h -- and is restored directly rather than rebuilt. The loader is kept
+because it documents how that corpus was produced, and because a future raw
+source can be pointed at `RAW_REPO`.
 """
 
 from __future__ import annotations
@@ -36,6 +43,14 @@ if TYPE_CHECKING:
 # has no model stack installed.
 
 log = logging.getLogger(__name__)
+
+# The raw upstream. None because btsee/mbspeech_mn was deleted; set it to a raw
+# mirror to make this loader runnable again.
+RAW_REPO: str | None = None
+
+# The cleaned corpus this loader produced, published so it never has to be
+# produced twice.
+CLEAN_REPO = "btsee/mbspeech-mn"
 
 # One narrator, but there is no speaker column, so a constant id is supplied.
 # Without it every clip looks like its own speaker and both the per-speaker cap
@@ -75,9 +90,16 @@ def process_mbspeech(
 ) -> CleaningStats:
     from ._load import load_hub_dataset
 
-    log.info("Loading MBSpeech Mongolian …")
-    ds = load_hub_dataset("btsee/mbspeech_mn",
-                          revision=PINNED_REVISIONS["btsee/mbspeech_mn"])
+    if RAW_REPO is None:
+        raise SystemExit(
+            "MBSpeech has no raw source any more: btsee/mbspeech_mn was deleted "
+            "after the cleaned corpus was published. Restore the cleaned corpus "
+            "from btsee/mbspeech-mn instead of re-cleaning, or set RAW_REPO to a "
+            "raw mirror. Re-cleaning the *cleaned* dataset would gate already "
+            "gated audio and shrink the corpus for no reason.")
+
+    log.info("Loading MBSpeech Mongolian from %s …", RAW_REPO)
+    ds = load_hub_dataset(RAW_REPO, revision=PINNED_REVISIONS.get(RAW_REPO))
 
     all_stats = CleaningStats("mbspeech_mn")
     for split_name in ds:
