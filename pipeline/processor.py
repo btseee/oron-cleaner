@@ -160,16 +160,46 @@ def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
 
     Needs the decoded audio a second time -- `process_clip` decoded and then
     discarded its own copy on the way to rejecting the clip, and nothing short
-    of decoding again gets it back. Passing an empty `speech_spans` gives up
-    the VAD as a corroborating signal for cut candidates; `split_at_silence`
-    treats that signal as optional, not required, so it still refuses on its
-    own terms rather than cutting somewhere unverified.
+    of decoding again gets it back. The VAD runs a second time for the same
+    reason: its speech spans are the independent silence signal every cut
+    candidate has to agree with, and `split_at_silence` refuses every cut
+    without them, so leaving them out is not "no corroboration", it is "no
+    split, ever".
+
+    `_run_vad` keeps its timestamps on the speech-ratio failure path, so a clip
+    that is mostly silence -- which is exactly what an over-long clip padded
+    with room tone looks like -- still yields usable spans.
     """
     audio, err = filt._load_audio(audio_input)
     if audio is None:
         return None
+
+    # The transcript the aligner is given must be the one that gets published,
+    # for two reasons that point the same way. word_timings refuses when
+    # romanisation does not emit one token per source word, and a digit
+    # romanises to nothing -- so on the raw text every clip containing a date
+    # or a number refuses, which is disproportionately the long ones this
+    # repair exists for. And a segment's transcript is a slice of whatever went
+    # in, so normalising first is what makes "the segments concatenate back to
+    # the original" an invariant about the published corpus.
+    try:
+        text = filt.normalized_text(ground_truth)
+    except Exception:
+        # The normaliser refuses constructions it cannot expand without
+        # guessing. A clip it will not publish is not one to spend a split on.
+        return None
+
+    _, timestamps, _ = filt._run_vad(audio)
+    if not timestamps:
+        return None
+    # Silero is asked for sample indices (return_seconds=False, so SNR can
+    # index the waveform with them); split_at_silence compares against word
+    # timings, which are seconds.
+    speech_spans = [
+        (t["start"] / SAMPLE_RATE, t["end"] / SAMPLE_RATE) for t in timestamps
+    ]
     return split_at_silence(
-        audio, SAMPLE_RATE, ground_truth, aligner=filt._aligner, speech_spans=[]
+        audio, SAMPLE_RATE, text, aligner=filt._aligner, speech_spans=speech_spans
     )
 
 
