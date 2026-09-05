@@ -126,11 +126,24 @@ class ForcedAligner:
         where each word sits in time, so this keeps what `word_scores` throws
         away. Empty if unalignable -- mirrors `word_scores`'s own guard
         clauses and except path exactly.
+
+        The word returned is the transcript's own -- romanisation is an input
+        format MMS_FA needs, not something a caller publishing, CER-scoring or
+        training on this text should ever see. `romanize` normally emits one
+        Latin token per source word, so the alignment result (ordered the same
+        way) can be zipped back against `text.split()`. But romanisation is not
+        guaranteed length-preserving: a digit-only word (uroman's Latin output
+        is filtered to a-z, so `2024` romanises to nothing) or a hyphenated
+        word split into two tokens (`Google-ийн` -> `google`, `iyn`) changes
+        the count. A mismatch means the positional pairing is no longer
+        trustworthy, so this refuses rather than risk zipping the wrong
+        original word to the wrong span.
         """
         import torch
 
         words = self.romanize(text)
-        if not words or audio.size < SAMPLE_RATE // 10:
+        source_words = text.split()
+        if not words or len(words) != len(source_words) or audio.size < SAMPLE_RATE // 10:
             return []
         waveform = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).to(self.device)
         try:
@@ -148,7 +161,7 @@ class ForcedAligner:
         # dividing by SAMPLE_RATE then turns that sample index into seconds.
         ratio = waveform.size(1) / emission.size(1)
         out = []
-        for word, span in zip(words, spans, strict=True):
+        for word, span in zip(source_words, spans, strict=True):
             sub = [s.score for s in span]
             if not sub:
                 out.append((word, 0.0, 0.0, 0.0))

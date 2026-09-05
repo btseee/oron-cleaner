@@ -159,6 +159,12 @@ def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
     So it refuses unless the alignment is confident on the words either side of
     the cut, every segment lands inside the duration limits, and the segments'
     transcripts concatenate back to the original.
+
+    A word-timing gap alone is not enough evidence of silence: it can be the
+    alignment jittering at a boundary rather than an actual pause. `speech_spans`
+    comes straight from the VAD, so it is a second, independently-measured
+    silence signal -- a candidate cut is only trusted when both agree there is
+    silence there.
     """
     duration = len(audio) / sr
     if duration <= MAX_DURATION_S:
@@ -167,16 +173,25 @@ def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
     if not timings:
         return None
 
+    # The silence between one VAD-detected speech span and the next -- the
+    # gaps a word-timing candidate must fall inside to count as real silence.
+    vad_silences = [(a_end, b_start) for (_, a_end), (b_start, _) in pairwise(speech_spans)]
+
     gaps = []
     for i in range(len(timings) - 1):
         _, _, end, score_a = timings[i]
         _, start, _, score_b = timings[i + 1]
         if start - end < MIN_DURATION_S:
             continue
+        midpoint = (end + start) / 2.0
+        if not any(vs <= midpoint <= ve for vs, ve in vad_silences):
+            # Word timings alone suggest a pause here, but the VAD -- looking
+            # directly at the audio -- disagrees; not a real cut candidate.
+            continue
         if min(score_a, score_b) < WEAK_WORD_SCORE:
             # The cut point is the one place the alignment has to be right.
             return None
-        gaps.append((i, (end + start) / 2.0))
+        gaps.append((i, midpoint))
     if not gaps:
         return None
 

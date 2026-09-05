@@ -73,3 +73,17 @@ def test_a_clip_with_no_usable_silence_is_not_split():
                             aligner=FakeAligner([("Сайн", 0.0, 12.0, 0.9),
                                                  ("байна", 12.0, 24.0, 0.9)]),
                             speech_spans=[(0.0, 24.0)]) is None
+
+
+def test_a_timing_gap_not_confirmed_by_the_vad_is_not_used_as_a_cut():
+    """Word-timing jitter can look like a pause that never happened. The VAD
+    measures silence directly from the audio, so a cut needs both to agree --
+    otherwise `speech_spans` would be an argument nothing actually checks."""
+    audio = speech(24.0)
+    timings = [("Сайн", 0.0, 4.0, 0.9), ("байна", 4.0, 10.0, 0.9),
+               ("Өнөөдөр", 14.0, 18.0, 0.9), ("сайхан", 18.0, 23.0, 0.9)]
+    # One continuous VAD speech span across the whole clip contradicts the
+    # apparent 10..14s gap in the word timings.
+    assert split_at_silence(audio, SAMPLE_RATE, "Сайн байна Өнөөдөр сайхан",
+                            aligner=FakeAligner(timings),
+                            speech_spans=[(0.0, 24.0)]) is None
