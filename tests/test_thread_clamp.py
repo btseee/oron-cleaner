@@ -11,9 +11,15 @@ from __future__ import annotations
 import sys
 import types
 
-import torch
+import pytest
 
-import pipeline.audio_filter as af
+# The whole module is about torch's thread count, so it has nothing to test
+# where torch is absent. Guarding at module scope is right *here* -- and only
+# because every test in the file needs it. A bare `import torch` was a hard
+# collection error on CI, which installs no model stack.
+torch = pytest.importorskip("torch", reason="torch not installed")
+
+import pipeline.audio_filter as af  # noqa: E402
 
 
 def test_filter_pins_torch_to_one_thread(monkeypatch):
