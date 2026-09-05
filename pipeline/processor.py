@@ -250,15 +250,18 @@ def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
 
     Needs the decoded audio a second time -- `process_clip` decoded and then
     discarded its own copy on the way to rejecting the clip, and nothing short
-    of decoding again gets it back. The VAD runs a second time for the same
-    reason: its speech spans are the independent silence signal every cut
-    candidate has to agree with, and `split_at_silence` refuses every cut
-    without them, so leaving them out is not "no corroboration", it is "no
-    split, ever".
+    of decoding again gets it back.
 
-    `_run_vad` keeps its timestamps on the speech-ratio failure path, so a clip
-    that is mostly silence -- which is exactly what an over-long clip padded
-    with room tone looks like -- still yields usable spans.
+    The VAD is re-run for one reason, and it is not trimming: splitting cuts
+    only at interior gaps and the last boundary is the clip's own duration, so
+    edge padding survives a split untouched and this repair can never remove
+    it. It is re-run because its speech spans are an independent measurement of
+    where the silence is, and a word-timing gap on its own can be the alignment
+    jittering at a boundary rather than a pause. `split_at_silence` refuses
+    every cut it cannot corroborate against them, so leaving them out is not
+    "no corroboration", it is "no split, ever". `_run_vad` keeps its timestamps
+    even on the speech-ratio failure path, so a clip rejected as mostly silence
+    still corroborates its own cut points.
     """
     audio, err = filt._load_audio(audio_input)
     if audio is None:
