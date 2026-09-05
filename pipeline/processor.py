@@ -30,8 +30,9 @@ from typing import TYPE_CHECKING, Any
 from .calibrate import Calibration
 from .checkpoint import flush_gpu_cache
 from .clip_result import ClipResult
-from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR
+from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR, SAMPLE_RATE
 from .corpus import CorpusWriter
+from .recovery import split_at_silence
 from .stats import CleaningStats, RejectionLog
 
 # Only a type here; importing it at runtime would pull the whole model stack
@@ -100,35 +101,42 @@ def process_split(
             log.warning("Clip %s crashed: %s", clip_id, exc)
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
-        # The normalised text is also what CER was scored against, so the
-        # corpus and the score describe one string. The normaliser refuses
-        # constructions it cannot expand without guessing (oron-tts
-        # docs/normaliser-review.md); the CER and alignment gates reject those
-        # already, so this is the belt to their braces. Resolved *before*
-        # stats.record so a refusal is counted as the rejection it is rather
-        # than as a pass -- and never published with unexpanded digits.
-        text = ""
-        if result.passed:
-            try:
-                text = filt.normalized_text(ground_truth)
-            except Exception as exc:
-                result = ClipResult(
-                    passed=False, reject_stage="normalize", reject_reason=str(exc)
-                )
+        # Only a too-long clip is a splitting candidate -- every other
+        # rejection stage is final, and a segment must never reach here
+        # itself (this branch only fires for the source clip, once).
+        segments = None
+        if (
+            not result.passed
+            and result.reject_stage == "duration"
+            and result.reject_reason.startswith("too_long")
+        ):
+            segments = _split_clip(filt, item[audio_field], ground_truth)
 
-        stats.record(result)
-        if calibration is not None:
-            calibration.record(result)
-
-        if result.passed:
-            writer.add(
-                clip_id,
-                result.audio_normalized,
-                text,
-                _metadata(result, item, extra_fields, field_renames),
-            )
-        else:
+        if segments is not None:
+            # The source clip is counted as the rejection it already is; the
+            # corpus gets only what the split produces, scored on its own
+            # merits. Not counting both would hide how much of the corpus
+            # started life as a rejected clip.
+            stats.record(result)
+            if calibration is not None:
+                calibration.record(result)
             reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
+
+            for i, (seg_audio, seg_sr, seg_text) in enumerate(segments):
+                seg_id = f"{clip_id}_p{i}"
+                seg_result = filt.process_clip(
+                    {"array": seg_audio, "sampling_rate": seg_sr}, seg_text
+                )
+                seg_result.recovered_by = "split_at_silence"
+                _finalize_clip(
+                    seg_id, seg_text, seg_result, item, filt, stats, writer,
+                    reject_log, extra_fields, field_renames, calibration,
+                )
+        else:
+            _finalize_clip(
+                clip_id, ground_truth, result, item, filt, stats, writer,
+                reject_log, extra_fields, field_renames, calibration,
+            )
 
         processed += 1
         if processed % _FLUSH_EVERY == 0:
@@ -145,6 +153,74 @@ def _clip_id(item: dict, dataset_name: str, split_name: str, idx: int) -> str:
     """Stable identity for resume, unique across datasets sharing a corpus."""
     raw = item.get("path") or item.get("id") or f"{split_name}_{idx}"
     return f"{dataset_name}_{Path(str(raw)).stem}"
+
+
+def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
+    """Attempt the one legal repair for a clip rejected as too long.
+
+    Needs the decoded audio a second time -- `process_clip` decoded and then
+    discarded its own copy on the way to rejecting the clip, and nothing short
+    of decoding again gets it back. Passing an empty `speech_spans` gives up
+    the VAD as a corroborating signal for cut candidates; `split_at_silence`
+    treats that signal as optional, not required, so it still refuses on its
+    own terms rather than cutting somewhere unverified.
+    """
+    audio, err = filt._load_audio(audio_input)
+    if audio is None:
+        return None
+    return split_at_silence(
+        audio, SAMPLE_RATE, ground_truth, aligner=filt._aligner, speech_spans=[]
+    )
+
+
+def _finalize_clip(
+    clip_id: str,
+    ground_truth: str,
+    result: ClipResult,
+    item: dict,
+    filt: AudioQualityFilter,
+    stats: CleaningStats,
+    writer: CorpusWriter,
+    reject_log: RejectionLog,
+    extra_fields: list[str],
+    field_renames: dict[str, str] | None,
+    calibration: Calibration | None,
+) -> None:
+    """Resolve one clip's text, record it, and write or log it.
+
+    Shared by the ordinary path and by each segment a split produces, so a
+    segment is gated, normalised and recorded exactly the way any other clip
+    is -- splitting earns a clip nothing beyond a chance at the same gates.
+    """
+    # The normalised text is also what CER was scored against, so the
+    # corpus and the score describe one string. The normaliser refuses
+    # constructions it cannot expand without guessing (oron-tts
+    # docs/normaliser-review.md); the CER and alignment gates reject those
+    # already, so this is the belt to their braces. Resolved *before*
+    # stats.record so a refusal is counted as the rejection it is rather
+    # than as a pass -- and never published with unexpanded digits.
+    text = ""
+    if result.passed:
+        try:
+            text = filt.normalized_text(ground_truth)
+        except Exception as exc:
+            result = ClipResult(
+                passed=False, reject_stage="normalize", reject_reason=str(exc)
+            )
+
+    stats.record(result)
+    if calibration is not None:
+        calibration.record(result)
+
+    if result.passed:
+        writer.add(
+            clip_id,
+            result.audio_normalized,
+            text,
+            _metadata(result, item, extra_fields, field_renames),
+        )
+    else:
+        reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
 
 
 def _metadata(
@@ -167,6 +243,7 @@ def _metadata(
         "len_ratio":        float(result.len_ratio),
         "asr_transcript":   result.asr_transcript,
         "duration_s":       float(result.duration_s),
+        "recovered_by":     result.recovered_by,
     }
     for field in extra_fields:
         dest = field_renames[field] if (field_renames and field in field_renames) else field

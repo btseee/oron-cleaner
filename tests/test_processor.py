@@ -63,6 +63,41 @@ def split(n: int):
             for i in range(n)]
 
 
+class SplittableFilter:
+    """A too-long rejection path plus the `_load_audio`/`_aligner` hooks
+    `_split_clip` needs. `split_at_silence` itself is monkeypatched per test,
+    so `_aligner` is never actually called through -- it only has to exist.
+    """
+
+    def __init__(self, too_long=(), reject=()):
+        self.too_long = set(too_long)
+        self.reject = set(reject)
+        self.seen: list[str] = []
+        self._aligner = object()
+
+    def process_clip(self, audio, ground_truth, measure_all=False):
+        self.seen.append(ground_truth)
+        if ground_truth in self.too_long:
+            return ClipResult(
+                passed=False, reject_stage="duration", reject_reason="too_long_25.00s"
+            )
+        if ground_truth in self.reject:
+            return ClipResult(passed=False, reject_stage="snr", reject_reason="too noisy")
+        return ClipResult(
+            passed=True,
+            audio_normalized=np.zeros(OUTPUT_SAMPLE_RATE // 2, dtype=np.float32),
+            duration_s=0.5,
+            snr_db=20.0,
+            align_score=0.9,
+        )
+
+    def _load_audio(self, audio_input):
+        return np.zeros(1, dtype=np.float32), ""
+
+    def normalized_text(self, text: str) -> str:
+        return text.upper()
+
+
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     """process_split writes stats and rejection logs under OUTPUT_DIR."""
@@ -182,3 +217,98 @@ def test_nothing_is_written_outside_the_temporary_directory(tmp_path):
     assert (tmp_path / "out" / "logs").is_dir()
     assert (tmp_path / "out" / "checkpoints").is_dir()
     assert not list(Path("output").glob("logs/rejected_fake_*"))
+
+
+# ── split_at_silence wiring ────────────────────────────────────────────────
+
+
+def test_a_clean_split_produces_its_segments_and_not_the_source(tmp_path, monkeypatch):
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [
+            (np.zeros(1, dtype=np.float32), 16000, f"{text} a"),
+            (np.zeros(1, dtype=np.float32), 16000, f"{text} b"),
+        ]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    filt = SplittableFilter(too_long={"text 0"})
+    stats = run(tmp_path / "corpus", split(1), filt)
+
+    manifest = read_manifest(tmp_path / "corpus")
+    assert {r["clip_id"] for r in manifest} == {"fake_clip0_p0", "fake_clip0_p1"}
+    # The source clip failed on its own merits and is counted as that
+    # rejection; the two segments are counted separately, on theirs.
+    assert stats.total == 3
+    assert stats.passed == 2
+
+
+def test_a_failing_segment_does_not_block_its_passing_siblings(tmp_path, monkeypatch):
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
+        ]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    filt = SplittableFilter(too_long={"text 0"}, reject={"text 0 b"})
+    run(tmp_path / "corpus", split(1), filt)
+
+    manifest = read_manifest(tmp_path / "corpus")
+    assert {r["clip_id"] for r in manifest} == {"fake_clip0_p0"}
+
+
+def test_a_rejection_for_any_other_reason_is_never_split(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        calls.append(text)
+        return None
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    filt = SplittableFilter(reject={"text 0"})
+    stats = run(tmp_path / "corpus", split(1), filt)
+
+    assert calls == []
+    assert stats.passed == 0
+    assert read_manifest(tmp_path / "corpus") == []
+
+
+def test_a_refused_split_leaves_the_clip_rejected(tmp_path, monkeypatch):
+    """split_at_silence returning None is a refusal, not a partial success --
+    the source clip must stay exactly as rejected as it already was."""
+    monkeypatch.setattr("pipeline.processor.split_at_silence", lambda *a, **k: None)
+    filt = SplittableFilter(too_long={"text 0"})
+    stats = run(tmp_path / "corpus", split(1), filt)
+
+    assert stats.total == 1
+    assert stats.passed == 0
+    assert read_manifest(tmp_path / "corpus") == []
+
+
+def test_a_segment_is_never_split_again(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        calls.append(text)
+        return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    # The segment's own ground truth would itself look like a too-long
+    # rejection if it were ever fed back through the split path -- proving
+    # it is not is exactly what this asserts.
+    filt = SplittableFilter(too_long={"text 0", "text 0 a"})
+    run(tmp_path / "corpus", split(1), filt)
+
+    assert calls == ["text 0"]
+    assert read_manifest(tmp_path / "corpus") == []
+
+
+def test_a_segment_carries_its_recovery_provenance(tmp_path, monkeypatch):
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [(np.zeros(1, dtype=np.float32), 16000, f"{text} a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    filt = SplittableFilter(too_long={"text 0"})
+    run(tmp_path / "corpus", split(1), filt)
+
+    manifest = read_manifest(tmp_path / "corpus")
+    assert manifest[0]["recovered_by"] == "split_at_silence"

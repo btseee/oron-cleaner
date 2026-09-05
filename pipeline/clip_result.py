@@ -50,3 +50,8 @@ class ClipResult:
     # Duration of the audio actually shipped, after edge-trimming.
     duration_s: float = 0.0
     audio_normalized: np.ndarray = field(default_factory=lambda: np.zeros(1))
+    # Name of the repair that produced this clip, e.g. "split_at_silence".
+    # Empty for a clip that passed on its own. Kept in the manifest so the
+    # corpus summary can report how much of it exists only because a repair
+    # ran, not because the source recording passed unmodified.
+    recovered_by: str = ""
