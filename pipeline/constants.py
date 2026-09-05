@@ -28,17 +28,24 @@ TORCH_THREADS: int = 1
 # lands in the corpus version and two corpora built under different recovery
 # rules cannot share a version string.
 
-# Target peak for gain normalisation. -3 dBFS leaves headroom for the 24 kHz
-# resample on the way out, which can overshoot the original peak.
-RECOVERY_TARGET_PEAK: float = 0.708
+# The shortest gap between two words that may be treated as a real silence, and
+# so a legal place to cut. It is VAD_MIN_SILENCE_MS expressed in seconds, and
+# deliberately so: the VAD is the second signal every cut candidate has to
+# satisfy, so a gap shorter than the detector's own notion of a silence could
+# never be corroborated anyway. MIN_DURATION_S stood here before, which is a
+# minimum *clip* length -- a full second of silence is far above an ordinary
+# Mongolian sentence pause, so no real recording ever offered a cut point.
+RECOVERY_MIN_SILENCE_S: float = 0.3
 
-# Below this peak a clip is quiet enough that the VAD and the recogniser suffer
-# for a reason that has nothing to do with the speaker. Above it, gain is
-# somebody's deliberate level and not ours to change.
-RECOVERY_QUIET_PEAK: float = 0.2
-
-# A DC offset this small is dither, not a defect worth a second gate pass.
-RECOVERY_MIN_DC: float = 0.001
+# The alignment score both words either side of a cut must reach. Numerically
+# the same as trimming.WEAK_WORD_SCORE, which this used to borrow, but it
+# cannot keep borrowing it: _policy_version() hashes this module's globals and
+# nothing else, so tuning the trimming constant would change which clips split
+# -- change the corpus -- while FILTER_POLICY_VERSION stayed put and old
+# checkpoints kept looking valid. The two answer different questions anyway
+# (where a transcript stops being supported, versus whether a cut point can be
+# trusted) and have no reason to move together.
+RECOVERY_MIN_CUT_SCORE: float = 0.30
 
 OUTPUT_SAMPLE_RATE: int = 24_000
 

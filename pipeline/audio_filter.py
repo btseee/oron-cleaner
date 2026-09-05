@@ -101,6 +101,60 @@ def _decode_with_ffmpeg(path) -> tuple[np.ndarray, int]:
     return audio, sr
 
 
+# Latin letters with an identical Cyrillic twin. Inside an otherwise-Cyrillic
+# word each has exactly one correct reading, so substituting one corrects an
+# encoding error rather than guessing at ambiguity.
+HOMOGLYPHS: dict[str, str] = {
+    "a": "а", "c": "с", "e": "е", "o": "о", "p": "р", "x": "х", "y": "у", "i": "и",
+    "A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "K": "К", "M": "М",
+    "O": "О", "P": "Р", "T": "Т", "X": "Х",
+}
+
+# `і` U+0456 (Ukrainian/Belarusian Cyrillic i) passes `is_representable` because
+# it is in the vocabulary, so it reaches the model as its own embedding row for
+# a letter nobody typed -- but it is not the Latin side of anything, it already
+# sits inside the Cyrillic block. HOMOGLYPHS' contract (asserted by the test
+# that walks it) is Latin key to Cyrillic value, so this single substitution
+# lives outside that dict instead of breaking it.
+_EXTRA_FIXES: dict[str, str] = {"і": "й"}
+
+_CYRILLIC = range(0x400, 0x500)
+
+
+def repair_homoglyphs(text: str) -> str:
+    """Correct Latin letters sitting inside Cyrillic words.
+
+    A normalisation, not a recovery: the letters reach the model as their own
+    embedding rows whether or not the clip carrying them was ever rejected, so
+    this runs on every transcript rather than being offered to failures as a
+    second chance.
+
+    The decision needs context: `о` in `Mонгол` is a typo for `О`, while
+    `Google` is a word that is simply Latin. Repair runs per hyphen-joined
+    segment rather than per whole space-separated word, because a hyphen
+    routinely joins a foreign word to a Mongolian suffix (`Google-ийн`) and the
+    Latin segment must not be repaired just for sitting next to a Cyrillic one.
+    A segment is repaired only when it already contains Cyrillic, which is what
+    makes this a correction rather than a guess.
+    """
+    words = text.split(" ")
+    for i, word in enumerate(words):
+        segments = word.split("-")
+        changed = False
+        for j, segment in enumerate(segments):
+            if not any(ord(c) in _CYRILLIC for c in segment):
+                continue
+            fixed = "".join(
+                HOMOGLYPHS.get(c, _EXTRA_FIXES.get(c, c)) for c in segment
+            )
+            if fixed != segment:
+                segments[j] = fixed
+                changed = True
+        if changed:
+            words[i] = "-".join(segments)
+    return " ".join(words)
+
+
 class AudioQualityFilter:
     """Load models once, then call process_clip() per clip.
 
@@ -171,8 +225,13 @@ class AudioQualityFilter:
         already reject a clip the normaliser refuses, so reaching this is a
         disagreement between two paths that must not be resolved by publishing
         the worse string. `process_split` turns it into a rejection.
+
+        Every normalisation in this file goes through here, so the gates score
+        the same string the corpus publishes -- a second `self._normalizer`
+        call elsewhere is how the homoglyph fix would silently apply to one
+        path and not another.
         """
-        return self._normalizer.normalize(text, strict=False)
+        return self._normalizer.normalize(repair_homoglyphs(text), strict=False)
 
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
 
@@ -297,7 +356,7 @@ class AudioQualityFilter:
         # and abbreviations cannot inflate CER. Previously "1990 онд" was scored
         # against "мянга есөн зуун ерэн онд" and rejected as a mismatch.
         try:
-            norm_gt = self._normalizer.normalize(ground_truth, strict=False)
+            norm_gt = self.normalized_text(ground_truth)
         except Exception as exc:
             return False, 1.0, 0.0, "", f"normalize_error:{exc}"
         if not norm_gt.strip():
@@ -447,7 +506,7 @@ class AudioQualityFilter:
         # correct) against 0.547 (worst mismatched), where CER's own floor on
         # correct clips is 0.123.
         try:
-            norm_gt = self._normalizer.normalize(ground_truth_text, strict=False)
+            norm_gt = self.normalized_text(ground_truth_text)
         except Exception as exc:
             note("alignment", f"normalize_error:{exc}")
             return done()
