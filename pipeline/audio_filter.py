@@ -80,6 +80,27 @@ log = logging.getLogger(__name__)
 ASR_MODEL = "bayartsogt/wav2vec2-large-xlsr-mongolian"
 
 
+def _decode_with_ffmpeg(path) -> tuple[np.ndarray, int]:
+    """Decode any container ffmpeg understands, as a fallback for torchaudio.
+
+    Returns mono float32 at the pipeline's own sample rate, so the caller's
+    resample step becomes a no-op rather than a second conversion.
+    """
+    import io
+    import subprocess
+
+    import soundfile as sf
+
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-f", "wav", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"],
+        capture_output=True, check=True)
+    audio, sr = sf.read(io.BytesIO(proc.stdout), dtype="float32")
+    if audio.size == 0:
+        raise RuntimeError(f"ffmpeg produced no samples for {path}")
+    return audio, sr
+
+
 class AudioQualityFilter:
     """Load models once, then call process_clip() per clip.
 
@@ -170,9 +191,20 @@ class AudioQualityFilter:
                 arr = samples.data.float().mean(0).cpu().numpy()
                 sr = int(samples.sample_rate)
             else:
-                # torchaudio handles MP3/WAV/FLAC without audioread
-                waveform, sr = torchaudio.load(str(audio_input))
-                arr = waveform.mean(0).numpy()
+                try:
+                    # torchaudio handles MP3/WAV/FLAC without audioread
+                    waveform, sr = torchaudio.load(str(audio_input))
+                    arr = waveform.mean(0).numpy()
+                except Exception:
+                    # torchaudio 2.9 dropped its own backends for torchcodec,
+                    # which needs FFmpeg's shared libraries -- not the ffmpeg
+                    # binary. On a machine that has the binary and not the
+                    # libraries, every mp3 fails here and the pipeline reports
+                    # it as a `load` rejection, so a missing codec reads as a
+                    # corpus that is 100% unusable. Decoding through the binary
+                    # costs a subprocess per clip and is only reached when
+                    # torchaudio has already refused.
+                    arr, sr = _decode_with_ffmpeg(audio_input)
             if sr != SAMPLE_RATE:
                 arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
             return arr.astype(np.float32), ""

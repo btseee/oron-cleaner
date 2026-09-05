@@ -212,3 +212,36 @@ def test_unmeasurable_snr_is_not_a_rejection():
     assert "return done()" not in nan_branch, (
         "an unmeasurable SNR must not drop the clip before DNSMOS has judged it"
     )
+
+
+def test_a_path_torchaudio_cannot_decode_falls_back_to_ffmpeg(tmp_path, monkeypatch):
+    """A missing codec must not read as an unusable corpus.
+
+    torchaudio 2.9 dropped its own backends for torchcodec, which needs
+    FFmpeg's shared libraries rather than the ffmpeg binary. On a machine with
+    the binary and not the libraries, every mp3 raised here and the pipeline
+    reported it as a `load` rejection -- 250 of 250 clips, which reads as a
+    corpus that is 100% unusable rather than as a decoder that is absent.
+    """
+    import numpy as np
+
+    import pipeline.audio_filter as af
+
+    calls = {"ffmpeg": 0}
+
+    def refuse(*a, **k):
+        raise RuntimeError("no torchaudio backend")
+
+    def fake_ffmpeg(path):
+        calls["ffmpeg"] += 1
+        return np.zeros(SAMPLE_RATE, dtype="float32"), SAMPLE_RATE
+
+    import torchaudio
+    monkeypatch.setattr(torchaudio, "load", refuse)
+    monkeypatch.setattr(af, "_decode_with_ffmpeg", fake_ffmpeg)
+
+    filt = af.AudioQualityFilter.__new__(af.AudioQualityFilter)
+    audio, err = af.AudioQualityFilter._load_audio(filt, tmp_path / "clip.mp3")
+    assert err == "", f"fallback did not run: {err}"
+    assert calls["ffmpeg"] == 1
+    assert audio is not None and len(audio) == SAMPLE_RATE
