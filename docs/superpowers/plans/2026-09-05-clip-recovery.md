@@ -356,9 +356,13 @@ Expected: the whole suite green, `All checks passed!`
 
 ---
 
-### Task 2: Trim to the aligned speech span
+### Task 2: Recover a clip rejected for being mostly silence
 
-The repair the spec expects to matter most for Common Voice: both SNR and DNSMOS are computed over the whole clip, so a long room-tone lead-in drags them down while the speech is untouched.
+`_run_vad` computes `speech_ratio` on the **untrimmed** clip (`audio_filter.py:215`) and rejects below 0.35 at `:216` — *before* `edge_trim_bounds` runs at `:222`. So a clip with three seconds of speech inside ten seconds of lead-in scores 0.30 and is discarded, while the edge-trimmed version would pass every gate.
+
+The repair applies the trim the VAD already computed. It uses the VAD's own timestamps, which are in **original-audio coordinates**, so it must run on the original audio — not on the trimmed array the later gates see.
+
+An earlier draft aimed this at `snr` and `dnsmos`. That was wrong: the VAD edge-trims before either is measured, so there is nothing there to recover.
 
 **Files:**
 - Modify: `pipeline/recovery.py`
@@ -609,9 +613,11 @@ REPAIRS: dict[str, Repair] = {
 # a test can assert every repair is reachable and every name resolves.
 RECOVERIES: dict[str, tuple[str, ...]] = {
     "clipping": ("remove_dc_offset",),
-    "snr": ("trim_to_speech",),
-    "dnsmos": ("trim_to_speech", "normalise_gain"),
-    "vad": ("normalise_gain",),
+    # `vad` covers both speech_ratio (answered by the edge trim the VAD already
+    # computed but rejected before applying) and a clip too quiet for the VAD to
+    # find speech in at all.
+    "vad": ("trim_to_speech", "normalise_gain"),
+    "dnsmos": ("normalise_gain",),
     "cer": ("repair_homoglyphs",),
     "alignment": ("repair_homoglyphs",),
 }
@@ -677,18 +683,30 @@ Then, immediately before the final `return done(trimmed)` at the end of the meth
         return result
 ```
 
-- [ ] **Step 6: Record the speech spans so the trim has something to use**
+- [ ] **Step 6: Record the ORIGINAL audio and its speech spans**
 
 In `pipeline/audio_filter.py`, inside `_run_vad`, after the speech timestamps are obtained, store them on the metrics dict the caller passes. Find the call site in `process_clip` and add, immediately after the VAD block:
 
+`_run_vad` returns `(trimmed_audio, timestamps, reason)` and the timestamps are in **samples on the ORIGINAL audio** (`return_seconds=False`, `audio_filter.py:206`). The trim repair therefore needs the original array, not the trimmed one — applying original-coordinate spans to the trimmed array would cut the wrong region.
+
+Capture both, immediately after the `_run_vad` call:
+
 ```python
-        # trim_to_speech needs the spans the VAD already found; recomputing them
-        # in the repair would be a second VAD pass for an answer we have.
-        m["speech_spans"] = [(t["start"] / SAMPLE_RATE, t["end"] / SAMPLE_RATE)
-                             for t in (timestamps or [])]
+        # The VAD's timestamps index the ORIGINAL audio, and the speech_ratio
+        # gate rejects before the edge trim is applied -- so the repair needs the
+        # untrimmed array to trim, not the array the later gates see.
+        m["speech_spans"] = [(ts["start"] / SAMPLE_RATE, ts["end"] / SAMPLE_RATE)
+                             for ts in (timestamps or [])]
+        original_audio = audio
 ```
 
-Adjust the variable name to whatever `_run_vad` returns in this file; the values must be seconds.
+and in Step 5's recovery block, pass `original_audio` rather than `trimmed` to `trim_to_speech`:
+
+```python
+            if name == "trim_to_speech":
+                repaired = repair(original_audio, SAMPLE_RATE, norm_gt,
+                                  speech_spans=m.get("speech_spans") or [])
+```
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
@@ -1173,4 +1191,4 @@ Second chance and the one-attempt guard: Task 3. Re-earning on the same threshol
 
 **Type consistency.** `Repair`, `REPAIRS`, `RECOVERIES`, `remove_dc_offset`, `normalise_gain`, `repair_homoglyphs`, `trim_to_speech`, `split_at_silence`, `ClipResult.recovered_by`, `CleaningStats.recovered`, `summarise` are each defined once and used under the same name throughout. `trim_to_speech` and `split_at_silence` take keyword-only extras, which is why Task 3 binds them at the call site rather than through the plain `Repair` signature — noted there.
 
-**One thing the implementer must check rather than assume.** Task 3, Step 6 stores `m["speech_spans"]` from whatever `_run_vad` returns. The exact variable name and units in `pipeline/audio_filter.py` were not verified when this plan was written; the values must end up in **seconds**. If `_run_vad` does not expose timestamps, this needs a small change there first, and the trim repair depends on it.
+**A correction made before this plan was finalised, recorded so it is not re-introduced.** An earlier draft aimed the trim repair at `snr` and `dnsmos`, on the reasoning that a long room-tone lead-in drags both down. It does not: `_run_vad` edge-trims at `audio_filter.py:222`, before either is measured. Reading the code rather than assuming it also surfaced the repair that *is* real — `speech_ratio` is computed on the untrimmed clip at `:215` and rejected at `:216`, before that trim is applied. Task 2 targets that gate, and uses the original audio because the VAD's timestamps index it.
