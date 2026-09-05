@@ -8,6 +8,18 @@
 
 **Tech Stack:** Python 3.12+, NumPy, librosa, existing `pipeline` package (`audio_filter`, `trimming`, `constants`, `clip_result`, `provenance`). Tests use pytest with synthetic audio; no network, no GPU.
 
+> **Do not execute this plan against Common Voice without reading the spec's
+> "Measured, before building anything" section first.** All three corpora were
+> measured after this plan was written. Common Voice keeps 74% and fails only
+> `dnsmos` (15%) and `bandwidth` (11%) — neither repairable under this design's
+> own rule. Every repair below targets a gate that never fired there: no `vad`,
+> no `clipping`, no `duration`, no `cer`, no `alignment`.
+>
+> The plan stands as written for **FLEURS and WorldSpeech**, where `duration`
+> (8%), `vad` (9% on WorldSpeech) and `alignment` (12% on WorldSpeech) are real.
+> For Common Voice, Task 5's calibration is expected to return roughly zero, and
+> that is the answer rather than a reason to loosen anything.
+
 ## Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-09-05-clip-recovery-design.md`.
