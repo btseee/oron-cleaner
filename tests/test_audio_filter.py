@@ -212,3 +212,107 @@ def test_unmeasurable_snr_is_not_a_rejection():
     assert "return done()" not in nan_branch, (
         "an unmeasurable SNR must not drop the clip before DNSMOS has judged it"
     )
+
+
+def test_a_path_torchaudio_cannot_decode_falls_back_to_ffmpeg(tmp_path, monkeypatch):
+    """A missing codec must not read as an unusable corpus.
+
+    torchaudio 2.9 dropped its own backends for torchcodec, which needs
+    FFmpeg's shared libraries rather than the ffmpeg binary. On a machine with
+    the binary and not the libraries, every mp3 raised here and the pipeline
+    reported it as a `load` rejection -- 250 of 250 clips, which reads as a
+    corpus that is 100% unusable rather than as a decoder that is absent.
+    """
+    import numpy as np
+
+    import pipeline.audio_filter as af
+
+    calls = {"ffmpeg": 0}
+
+    def refuse(*a, **k):
+        raise RuntimeError("no torchaudio backend")
+
+    def fake_ffmpeg(path):
+        calls["ffmpeg"] += 1
+        return np.zeros(SAMPLE_RATE, dtype="float32"), SAMPLE_RATE
+
+    import torchaudio
+    monkeypatch.setattr(torchaudio, "load", refuse)
+    monkeypatch.setattr(af, "_decode_with_ffmpeg", fake_ffmpeg)
+
+    filt = af.AudioQualityFilter.__new__(af.AudioQualityFilter)
+    audio, err = af.AudioQualityFilter._load_audio(filt, tmp_path / "clip.mp3")
+    assert err == "", f"fallback did not run: {err}"
+    assert calls["ffmpeg"] == 1
+    assert audio is not None and len(audio) == SAMPLE_RATE
+
+
+# ── homoglyphs ────────────────────────────────────────────────────────────────
+#
+# A Latin letter inside a Cyrillic word is an encoding error, and it reaches the
+# model as its own embedding row whether or not the clip carrying it was ever
+# rejected. So this is normalisation, not recovery: it belongs on the path every
+# transcript takes, and these drive it there rather than through a repair table.
+
+def test_a_latin_letter_inside_a_cyrillic_word_is_corrected():
+    """`о` U+006F in an otherwise-Cyrillic word has exactly one correct reading.
+    It is an encoding error, not an ambiguity, so fixing it guesses nothing."""
+    from pipeline.audio_filter import repair_homoglyphs
+
+    assert repair_homoglyphs("Mонгол хэл") == "Монгол хэл"
+
+
+def test_the_ukrainian_i_is_corrected():
+    """U+0456 passes `is_representable` because it is in the vocabulary, so it
+    reaches the model as a distinct embedding row for a letter nobody typed."""
+    from pipeline.audio_filter import repair_homoglyphs
+
+    assert repair_homoglyphs("саін") == "сайн"
+
+
+def test_an_all_latin_word_is_left_alone():
+    """An English proper noun in a Mongolian sentence is not an encoding error.
+
+    Hyphen-joined segments are judged one at a time: `Google-ийн` puts a Latin
+    word next to a Cyrillic suffix, and proximity is not evidence."""
+    from pipeline.audio_filter import repair_homoglyphs
+
+    assert repair_homoglyphs("Google-ийн") == "Google-ийн"
+
+
+def test_clean_cyrillic_is_returned_unchanged():
+    from pipeline.audio_filter import repair_homoglyphs
+
+    assert repair_homoglyphs("Сайн байна уу") == "Сайн байна уу"
+
+
+def test_every_homoglyph_maps_to_a_cyrillic_letter():
+    """A mapping that produced another Latin letter would move the problem."""
+    from pipeline.audio_filter import HOMOGLYPHS
+
+    for latin, cyrillic in HOMOGLYPHS.items():
+        assert ord(latin) < 0x400, f"{latin!r} is not the Latin side"
+        assert 0x400 <= ord(cyrillic) <= 0x4FF, f"{cyrillic!r} is not Cyrillic"
+
+
+def test_the_published_text_has_its_homoglyphs_repaired(filt):
+    """The wiring, not the function: `normalized_text` is what the corpus
+    writer publishes and what the CER gate scored against, so a repair that
+    only existed in a repair table would never reach either."""
+    assert "M" not in filt.normalized_text("Mонгол хэл")
+
+
+def test_the_alignment_gate_scores_the_repaired_text(filt):
+    """One string, three uses -- published, CER-scored, aligned against. A
+    repair reaching only the published copy would score the corpus against
+    text it does not contain."""
+    seen = []
+
+    class _Recording:
+        def score(self, audio, text):
+            seen.append(text)
+            return 0.95
+
+    filt._aligner = _Recording()
+    filt.process_clip(_speech(), "Mонгол хэл")
+    assert seen and "M" not in seen[0]

@@ -30,8 +30,9 @@ from typing import TYPE_CHECKING, Any
 from .calibrate import Calibration
 from .checkpoint import flush_gpu_cache
 from .clip_result import ClipResult
-from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR
+from .constants import FILTER_POLICY_VERSION, OUTPUT_DIR, SAMPLE_RATE
 from .corpus import CorpusWriter
+from .recovery import split_at_silence
 from .stats import CleaningStats, RejectionLog
 
 # Only a type here; importing it at runtime would pull the whole model stack
@@ -77,6 +78,15 @@ def process_split(
         OUTPUT_DIR / "logs" / f"rejected_{run_name}.csv", append=resume
     )
 
+    # Which sources splitting has already consumed. Recorded on its own because
+    # nothing else on disk can answer the question: the writer holds only clips
+    # that passed, and the reject log cannot tell a consumed source from one
+    # whose split was refused -- both are `duration`/`too_long`.
+    consumed_path = _consumed_path(run_name)
+    if not resume and consumed_path.exists():
+        consumed_path.unlink()
+    consumed = _load_consumed(consumed_path) if resume else set()
+
     total = len(split_dataset)
     if limit is not None:
         total = min(total, limit)
@@ -88,7 +98,21 @@ def process_split(
         item = split_dataset[idx]
         clip_id = _clip_id(item, dataset_name, split_name, idx)
 
-        if clip_id in writer:
+        # A split source's own id is never written: the corpus gets
+        # `{clip_id}_p0`, `_p1`, ... and the source is only ever a rejection.
+        # And every segment has to re-earn its place, so when `_p0` is rejected
+        # and `_p1` passes -- or when every segment is rejected -- nothing on
+        # disk is named after the source at all. Without the `consumed` test
+        # every restart then re-decodes it, re-splits it, re-runs the whole
+        # model stack on each segment, and adds a fresh copy of the source's
+        # rejection and its segments' results to the stats and the reject log.
+        # Measured with `_p0` failing and `_p1` passing over three runs of one
+        # clip: total 3, 6, 9 and passed 1, 2, 3.
+        #
+        # `_p0 in writer` stays for corpora written before the sidecar existed:
+        # their consumed sources are absent from it, and would otherwise all be
+        # split a second time on the next restart.
+        if clip_id in writer or clip_id in consumed or f"{clip_id}_p0" in writer:
             continue
 
         ground_truth = item.get(text_field, "") or ""
@@ -100,35 +124,77 @@ def process_split(
             log.warning("Clip %s crashed: %s", clip_id, exc)
             result = ClipResult(passed=False, reject_stage="crash", reject_reason=str(exc))
 
-        # The normalised text is also what CER was scored against, so the
-        # corpus and the score describe one string. The normaliser refuses
-        # constructions it cannot expand without guessing (oron-tts
-        # docs/normaliser-review.md); the CER and alignment gates reject those
-        # already, so this is the belt to their braces. Resolved *before*
-        # stats.record so a refusal is counted as the rejection it is rather
-        # than as a pass -- and never published with unexpanded digits.
-        text = ""
-        if result.passed:
+        # Only a too-long clip is a splitting candidate -- every other
+        # rejection stage is final, and a segment must never reach here
+        # itself (this branch only fires for the source clip, once).
+        segments = None
+        if (
+            not result.passed
+            and result.reject_stage == "duration"
+            and result.reject_reason.startswith("too_long")
+        ):
             try:
-                text = filt.normalized_text(ground_truth)
+                segments = _split_clip(filt, item[audio_field], ground_truth)
             except Exception as exc:
+                # `_split_clip` is not internally total: it decodes the audio
+                # again, re-runs the VAD, and reaches `word_timings`, which
+                # romanises arbitrary corpus text and zips `strict=True`
+                # outside its own try. Unguarded, any of that ends a 24-48 h
+                # pass. Counted as a crash rather than left as the duration
+                # rejection it arrived with, so a splitter failing
+                # systematically is visible in the report instead of hidden
+                # inside the `duration` count -- with the rejection it already
+                # earned kept in the reason, so nothing is lost.
+                log.warning("Splitting clip %s crashed: %s", clip_id, exc)
                 result = ClipResult(
-                    passed=False, reject_stage="normalize", reject_reason=str(exc)
+                    passed=False, reject_stage="crash",
+                    reject_reason=f"split after {result.reject_reason}: {exc}",
                 )
 
-        stats.record(result)
-        if calibration is not None:
-            calibration.record(result)
-
-        if result.passed:
-            writer.add(
-                clip_id,
-                result.audio_normalized,
-                text,
-                _metadata(result, item, extra_fields, field_renames),
-            )
-        else:
+        if segments is not None:
+            # The source clip is counted as the rejection it already is; the
+            # corpus gets only what the split produces, scored on its own
+            # merits. Not counting both would hide how much of the corpus
+            # started life as a rejected clip.
+            stats.record(result)
+            if calibration is not None:
+                calibration.record(result)
             reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
+
+            for i, (seg_audio, seg_sr, seg_text) in enumerate(segments):
+                seg_id = f"{clip_id}_p{i}"
+                try:
+                    seg_result = filt.process_clip(
+                        {"array": seg_audio, "sampling_rate": seg_sr}, seg_text,
+                        # Calibration's whole value is that every clip is scored
+                        # by every gate; a segment measured only to its first
+                        # failure would bias the per-gate rates it feeds.
+                        measure_all=calibration is not None,
+                    )
+                except Exception as exc:
+                    # The same guard the source call has, for the same reason:
+                    # a segment is arbitrary audio and arbitrary text through
+                    # the whole model stack, and the run must survive it.
+                    log.warning("Segment %s crashed: %s", seg_id, exc)
+                    seg_result = ClipResult(
+                        passed=False, reject_stage="crash", reject_reason=str(exc)
+                    )
+                seg_result.recovered_by = "split_at_silence"
+                _finalize_clip(
+                    seg_id, seg_text, seg_result, item, filt, stats, writer,
+                    reject_log, extra_fields, field_renames, calibration,
+                )
+
+            # Recorded once every segment has been resolved rather than before
+            # the loop, so a crash part-way through costs one clip's re-work on
+            # the next run instead of abandoning the segments it never reached.
+            consumed.add(clip_id)
+            _record_consumed(consumed_path, clip_id)
+        else:
+            _finalize_clip(
+                clip_id, ground_truth, result, item, filt, stats, writer,
+                reject_log, extra_fields, field_renames, calibration,
+            )
 
         processed += 1
         if processed % _FLUSH_EVERY == 0:
@@ -141,10 +207,147 @@ def process_split(
     return stats
 
 
+def _consumed_path(run_name: str) -> Path:
+    """Where the ids of sources consumed by splitting are kept.
+
+    Beside the stats checkpoint and namespaced the same way, so it is
+    invalidated by a policy change for exactly the same reason the stats are:
+    which clips split is a function of the recovery constants, and those are
+    hashed into `FILTER_POLICY_VERSION`.
+    """
+    return OUTPUT_DIR / "checkpoints" / f"{run_name}.split_sources.txt"
+
+
+def _load_consumed(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def _record_consumed(path: Path, clip_id: str) -> None:
+    """Append one consumed source id, durably.
+
+    Opened and closed per call rather than held for the run: splitting fires on
+    a few per cent of clips at most, so the cost is nothing, and it is one less
+    handle to leak down a path that can raise.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(clip_id + "\n")
+
+
 def _clip_id(item: dict, dataset_name: str, split_name: str, idx: int) -> str:
     """Stable identity for resume, unique across datasets sharing a corpus."""
     raw = item.get("path") or item.get("id") or f"{split_name}_{idx}"
     return f"{dataset_name}_{Path(str(raw)).stem}"
+
+
+def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
+    """Attempt the one legal repair for a clip rejected as too long.
+
+    Needs the decoded audio a second time -- `process_clip` decoded and then
+    discarded its own copy on the way to rejecting the clip, and nothing short
+    of decoding again gets it back.
+
+    The VAD is re-run for one reason, and it is not trimming: splitting cuts
+    only at interior gaps and the last boundary is the clip's own duration, so
+    edge padding survives a split untouched and this repair can never remove
+    it. It is re-run because its speech spans are an independent measurement of
+    where the silence is, and a word-timing gap on its own can be the alignment
+    jittering at a boundary rather than a pause. `split_at_silence` refuses
+    every cut it cannot corroborate against them, so leaving them out is not
+    "no corroboration", it is "no split, ever". `_run_vad` keeps its timestamps
+    even on the speech-ratio failure path, so a clip rejected as mostly silence
+    still corroborates its own cut points.
+    """
+    audio, err = filt._load_audio(audio_input)
+    if audio is None:
+        return None
+
+    # The transcript the aligner is given must be the one that gets published,
+    # for two reasons that point the same way. word_timings refuses when
+    # romanisation does not emit one token per source word, and a digit
+    # romanises to nothing -- so on the raw text every clip containing a date
+    # or a number refuses, which is disproportionately the long ones this
+    # repair exists for. And a segment's transcript is a slice of whatever went
+    # in, so normalising first is what makes "the segments concatenate back to
+    # the original" an invariant about the published corpus.
+    try:
+        text = filt.normalized_text(ground_truth)
+    except Exception:
+        # The normaliser refuses constructions it cannot expand without
+        # guessing. A clip it will not publish is not one to spend a split on.
+        return None
+
+    _, timestamps, _ = filt._run_vad(audio)
+    if not timestamps:
+        return None
+    # Silero is asked for sample indices (return_seconds=False, so SNR can
+    # index the waveform with them); split_at_silence compares against word
+    # timings, which are seconds.
+    speech_spans = [
+        (t["start"] / SAMPLE_RATE, t["end"] / SAMPLE_RATE) for t in timestamps
+    ]
+    return split_at_silence(
+        audio, SAMPLE_RATE, text, aligner=filt._aligner, speech_spans=speech_spans
+    )
+
+
+def _finalize_clip(
+    clip_id: str,
+    ground_truth: str,
+    result: ClipResult,
+    item: dict,
+    filt: AudioQualityFilter,
+    stats: CleaningStats,
+    writer: CorpusWriter,
+    reject_log: RejectionLog,
+    extra_fields: list[str],
+    field_renames: dict[str, str] | None,
+    calibration: Calibration | None,
+) -> None:
+    """Resolve one clip's text, record it, and write or log it.
+
+    Shared by the ordinary path and by each segment a split produces, so a
+    segment is gated, normalised and recorded exactly the way any other clip
+    is -- splitting earns a clip nothing beyond a chance at the same gates.
+    """
+    # The normalised text is also what CER was scored against, so the
+    # corpus and the score describe one string. The normaliser refuses
+    # constructions it cannot expand without guessing (oron-tts
+    # docs/normaliser-review.md); the CER and alignment gates reject those
+    # already, so this is the belt to their braces. Resolved *before*
+    # stats.record so a refusal is counted as the rejection it is rather
+    # than as a pass -- and never published with unexpanded digits.
+    text = ""
+    if result.passed:
+        try:
+            text = filt.normalized_text(ground_truth)
+        except Exception as exc:
+            result = ClipResult(
+                passed=False, reject_stage="normalize", reject_reason=str(exc),
+                # A fresh result, so carry the provenance across by hand: a
+                # segment whose text is refused is still a segment, and the
+                # rejection log is where the yield of a repair is read off.
+                recovered_by=result.recovered_by,
+            )
+
+    stats.record(result)
+    if calibration is not None:
+        calibration.record(result)
+
+    if result.passed:
+        writer.add(
+            clip_id,
+            result.audio_normalized,
+            text,
+            _metadata(result, item, extra_fields, field_renames),
+        )
+    else:
+        reject_log.record(clip_id, result.reject_stage, result.reject_reason, ground_truth)
 
 
 def _metadata(
@@ -167,6 +370,7 @@ def _metadata(
         "len_ratio":        float(result.len_ratio),
         "asr_transcript":   result.asr_transcript,
         "duration_s":       float(result.duration_s),
+        "recovered_by":     result.recovered_by,
     }
     for field in extra_fields:
         dest = field_renames[field] if (field_renames and field in field_renames) else field
@@ -190,6 +394,7 @@ def _save_stats(run_name: str, stats: CleaningStats) -> None:
         "total": stats.total,
         "passed": stats.passed,
         "stage_counts": stats.stage_counts,
+        "recovered_counts": stats.recovered_counts,
         "total_duration_s": stats.total_duration_s,
         "sum_dnsmos_ovr": stats.sum_dnsmos_ovr,
         "sum_snr": stats.sum_snr,
@@ -210,6 +415,7 @@ def _load_stats(run_name: str, display_name: str) -> CleaningStats:
     stats.total = d.get("total", 0)
     stats.passed = d.get("passed", 0)
     stats.stage_counts = d.get("stage_counts", {})
+    stats.recovered_counts = d.get("recovered_counts", {})
     stats.total_duration_s = d.get("total_duration_s", 0.0)
     stats.sum_dnsmos_ovr = d.get("sum_dnsmos_ovr", 0.0)
     stats.sum_snr = d.get("sum_snr", 0.0)

@@ -104,3 +104,52 @@ def test_an_empty_report_does_not_divide_by_zero():
 
 def test_the_report_names_the_dataset():
     assert "FLEURS" in CleaningStats("fleurs").report().upper()
+
+
+# ── recovered fraction ────────────────────────────────────────────────────────
+
+def test_recovered_clips_are_counted_by_the_repair_that_made_them():
+    """The design requires the recovered fraction to be reported, and the field
+    reached the manifest, but nothing counted it -- so the one number that says
+    how much of the corpus is repaired material was never available."""
+    stats = CleaningStats("x")
+    stats.record(passed(recovered_by="split_at_silence"))
+    stats.record(passed(recovered_by="split_at_silence"))
+    stats.record(passed())
+    assert stats.recovered_counts == {"split_at_silence": 2}
+
+
+def test_a_rejected_clip_is_not_counted_as_recovered():
+    """A repair that ran and then failed the gates recovered nothing. The
+    interesting number is what share of the corpus a repair put there."""
+    stats = CleaningStats("x")
+    stats.record(ClipResult(passed=False, reject_stage="snr",
+                            reject_reason="because", recovered_by="split_at_silence"))
+    assert stats.recovered_counts == {}
+
+
+def test_merge_adds_the_recovered_counts():
+    a, b = CleaningStats("a"), CleaningStats("b")
+    a.record(passed(recovered_by="split_at_silence"))
+    b.record(passed(recovered_by="split_at_silence"))
+    a.merge(b)
+    assert a.recovered_counts == {"split_at_silence": 2}
+
+
+def test_the_report_gives_the_recovered_count_and_its_share_of_kept():
+    stats = CleaningStats("x")
+    for _ in range(3):
+        stats.record(passed(recovered_by="split_at_silence"))
+    for _ in range(7):
+        stats.record(passed())
+    report = stats.report()
+    assert "split_at_silence" in report
+    assert "30.0% of kept" in report
+
+
+def test_the_report_says_so_when_nothing_was_recovered():
+    """Printed either way: "none was recovered" is a measurement, not a line
+    that happened not to appear."""
+    stats = CleaningStats("x")
+    stats.record(passed())
+    assert "Recovered" in stats.report()

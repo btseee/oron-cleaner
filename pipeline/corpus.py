@@ -294,6 +294,28 @@ def _per_source_cer(splits: dict[str, list[dict]]) -> str:
     return "\n".join(out)
 
 
+def _recovered_share(splits: dict[str, list[dict]]) -> str:
+    """How much of the corpus exists only because a repair ran.
+
+    A corpus that is 30% repaired clips has a different character from one that
+    is not, even when every clip passed the same gates. `recovered_by` has
+    reached the manifest since splitting shipped, so the number was always
+    derivable -- but nothing derived it, and a number nobody prints is a number
+    nobody checks. Printed even when it is zero, so "none was recovered" is a
+    measurement rather than a line that happened not to appear.
+    """
+    from collections import Counter
+
+    rows = [r for rs in splits.values() for r in rs]
+    counts = Counter(name for r in rows if (name := r.get("recovered_by")))
+    lines = ["Recovered clips (repaired, then re-gated on the same thresholds):"]
+    if not counts:
+        return lines[0] + "\n  none — every kept clip passed as recorded"
+    for name, n in sorted(counts.items()):
+        lines.append(f"  {name:<22}{n:>8,}  ({100.0 * n / max(len(rows), 1):.1f}% of kept)")
+    return "\n".join(lines)
+
+
 def summarise(splits: dict[str, list[dict]]) -> str:
     """Human-readable corpus summary, including the acceptance criteria."""
     lines = ["=== Corpus summary ===", ""]
@@ -315,7 +337,8 @@ def summarise(splits: dict[str, list[dict]]) -> str:
         total_h += h
         lines.append(f"{name:<12}{len(rs):>8,}{h:>9.1f}{spk:>10}{mh:>9.1f}{fh:>10.1f}")
 
-    lines += ["", text_diversity(splits), "", _per_source_cer(splits)]
+    lines += ["", text_diversity(splits), "", _per_source_cer(splits),
+              "", _recovered_share(splits)]
 
     male_speakers = len({
         str(r.get("client_id")) for rs in splits.values() for r in rs

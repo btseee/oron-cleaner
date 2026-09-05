@@ -41,7 +41,6 @@ from oron_tts.text import MongolianNormalizer
 from .alignment import ForcedAligner
 from .clip_result import ClipResult
 from .constants import (
-    TORCH_THREADS,
     DNSMOS_MIN_BAK,
     DNSMOS_MIN_OVR,
     DNSMOS_MIN_SIG,
@@ -54,6 +53,7 @@ from .constants import (
     OUTPUT_SAMPLE_RATE,
     SAMPLE_RATE,
     SNR_MIN_DB,
+    TORCH_THREADS,
     VAD_MIN_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
     VAD_MIN_SPEECH_RATIO,
@@ -78,6 +78,81 @@ log = logging.getLogger(__name__)
 # whisper-large-v3 has a CER floor of 0.311 on clean, correctly-transcribed
 # Mongolian; this model measures 0.123 median at a fifth of the parameters.
 ASR_MODEL = "bayartsogt/wav2vec2-large-xlsr-mongolian"
+
+
+def _decode_with_ffmpeg(path) -> tuple[np.ndarray, int]:
+    """Decode any container ffmpeg understands, as a fallback for torchaudio.
+
+    Returns mono float32 at the pipeline's own sample rate, so the caller's
+    resample step becomes a no-op rather than a second conversion.
+    """
+    import io
+    import subprocess
+
+    import soundfile as sf
+
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-f", "wav", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"],
+        capture_output=True, check=True)
+    audio, sr = sf.read(io.BytesIO(proc.stdout), dtype="float32")
+    if audio.size == 0:
+        raise RuntimeError(f"ffmpeg produced no samples for {path}")
+    return audio, sr
+
+
+# Latin letters with an identical Cyrillic twin. Inside an otherwise-Cyrillic
+# word each has exactly one correct reading, so substituting one corrects an
+# encoding error rather than guessing at ambiguity.
+HOMOGLYPHS: dict[str, str] = {
+    "a": "а", "c": "с", "e": "е", "o": "о", "p": "р", "x": "х", "y": "у", "i": "и",
+    "A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "K": "К", "M": "М",
+    "O": "О", "P": "Р", "T": "Т", "X": "Х",
+}
+
+# `і` U+0456 (Ukrainian/Belarusian Cyrillic i) passes `is_representable` because
+# it is in the vocabulary, so it reaches the model as its own embedding row for
+# a letter nobody typed -- but it is not the Latin side of anything, it already
+# sits inside the Cyrillic block. HOMOGLYPHS' contract (asserted by the test
+# that walks it) is Latin key to Cyrillic value, so this single substitution
+# lives outside that dict instead of breaking it.
+_EXTRA_FIXES: dict[str, str] = {"і": "й"}
+
+_CYRILLIC = range(0x400, 0x500)
+
+
+def repair_homoglyphs(text: str) -> str:
+    """Correct Latin letters sitting inside Cyrillic words.
+
+    A normalisation, not a recovery: the letters reach the model as their own
+    embedding rows whether or not the clip carrying them was ever rejected, so
+    this runs on every transcript rather than being offered to failures as a
+    second chance.
+
+    The decision needs context: `о` in `Mонгол` is a typo for `О`, while
+    `Google` is a word that is simply Latin. Repair runs per hyphen-joined
+    segment rather than per whole space-separated word, because a hyphen
+    routinely joins a foreign word to a Mongolian suffix (`Google-ийн`) and the
+    Latin segment must not be repaired just for sitting next to a Cyrillic one.
+    A segment is repaired only when it already contains Cyrillic, which is what
+    makes this a correction rather than a guess.
+    """
+    words = text.split(" ")
+    for i, word in enumerate(words):
+        segments = word.split("-")
+        changed = False
+        for j, segment in enumerate(segments):
+            if not any(ord(c) in _CYRILLIC for c in segment):
+                continue
+            fixed = "".join(
+                HOMOGLYPHS.get(c, _EXTRA_FIXES.get(c, c)) for c in segment
+            )
+            if fixed != segment:
+                segments[j] = fixed
+                changed = True
+        if changed:
+            words[i] = "-".join(segments)
+    return " ".join(words)
 
 
 class AudioQualityFilter:
@@ -108,7 +183,6 @@ class AudioQualityFilter:
         # limitation here, it is the fast path -- so it is set deliberately and
         # kept, rather than left to a side effect of an unrelated import.
         import torch
-
         from silero_vad import load_silero_vad
 
         self._vad_model = load_silero_vad()
@@ -151,8 +225,13 @@ class AudioQualityFilter:
         already reject a clip the normaliser refuses, so reaching this is a
         disagreement between two paths that must not be resolved by publishing
         the worse string. `process_split` turns it into a rejection.
+
+        Every normalisation in this file goes through here, so the gates score
+        the same string the corpus publishes -- a second `self._normalizer`
+        call elsewhere is how the homoglyph fix would silently apply to one
+        path and not another.
         """
-        return self._normalizer.normalize(text, strict=False)
+        return self._normalizer.normalize(repair_homoglyphs(text), strict=False)
 
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
 
@@ -171,9 +250,20 @@ class AudioQualityFilter:
                 arr = samples.data.float().mean(0).cpu().numpy()
                 sr = int(samples.sample_rate)
             else:
-                # torchaudio handles MP3/WAV/FLAC without audioread
-                waveform, sr = torchaudio.load(str(audio_input))
-                arr = waveform.mean(0).numpy()
+                try:
+                    # torchaudio handles MP3/WAV/FLAC without audioread
+                    waveform, sr = torchaudio.load(str(audio_input))
+                    arr = waveform.mean(0).numpy()
+                except Exception:
+                    # torchaudio 2.9 dropped its own backends for torchcodec,
+                    # which needs FFmpeg's shared libraries -- not the ffmpeg
+                    # binary. On a machine that has the binary and not the
+                    # libraries, every mp3 fails here and the pipeline reports
+                    # it as a `load` rejection, so a missing codec reads as a
+                    # corpus that is 100% unusable. Decoding through the binary
+                    # costs a subprocess per clip and is only reached when
+                    # torchaudio has already refused.
+                    arr, sr = _decode_with_ffmpeg(audio_input)
             if sr != SAMPLE_RATE:
                 arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
             return arr.astype(np.float32), ""
@@ -266,7 +356,7 @@ class AudioQualityFilter:
         # and abbreviations cannot inflate CER. Previously "1990 онд" was scored
         # against "мянга есөн зуун ерэн онд" and rejected as a mismatch.
         try:
-            norm_gt = self._normalizer.normalize(ground_truth, strict=False)
+            norm_gt = self.normalized_text(ground_truth)
         except Exception as exc:
             return False, 1.0, 0.0, "", f"normalize_error:{exc}"
         if not norm_gt.strip():
@@ -416,7 +506,7 @@ class AudioQualityFilter:
         # correct) against 0.547 (worst mismatched), where CER's own floor on
         # correct clips is 0.123.
         try:
-            norm_gt = self._normalizer.normalize(ground_truth_text, strict=False)
+            norm_gt = self.normalized_text(ground_truth_text)
         except Exception as exc:
             note("alignment", f"normalize_error:{exc}")
             return done()
