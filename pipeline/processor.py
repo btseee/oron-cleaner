@@ -133,7 +133,23 @@ def process_split(
             and result.reject_stage == "duration"
             and result.reject_reason.startswith("too_long")
         ):
-            segments = _split_clip(filt, item[audio_field], ground_truth)
+            try:
+                segments = _split_clip(filt, item[audio_field], ground_truth)
+            except Exception as exc:
+                # `_split_clip` is not internally total: it decodes the audio
+                # again, re-runs the VAD, and reaches `word_timings`, which
+                # romanises arbitrary corpus text and zips `strict=True`
+                # outside its own try. Unguarded, any of that ends a 24-48 h
+                # pass. Counted as a crash rather than left as the duration
+                # rejection it arrived with, so a splitter failing
+                # systematically is visible in the report instead of hidden
+                # inside the `duration` count -- with the rejection it already
+                # earned kept in the reason, so nothing is lost.
+                log.warning("Splitting clip %s crashed: %s", clip_id, exc)
+                result = ClipResult(
+                    passed=False, reject_stage="crash",
+                    reject_reason=f"split after {result.reject_reason}: {exc}",
+                )
 
         if segments is not None:
             # The source clip is counted as the rejection it already is; the
@@ -147,13 +163,22 @@ def process_split(
 
             for i, (seg_audio, seg_sr, seg_text) in enumerate(segments):
                 seg_id = f"{clip_id}_p{i}"
-                seg_result = filt.process_clip(
-                    {"array": seg_audio, "sampling_rate": seg_sr}, seg_text,
-                    # Calibration's whole value is that every clip is scored by
-                    # every gate; a segment measured only to its first failure
-                    # would bias the per-gate rates it feeds.
-                    measure_all=calibration is not None,
-                )
+                try:
+                    seg_result = filt.process_clip(
+                        {"array": seg_audio, "sampling_rate": seg_sr}, seg_text,
+                        # Calibration's whole value is that every clip is scored
+                        # by every gate; a segment measured only to its first
+                        # failure would bias the per-gate rates it feeds.
+                        measure_all=calibration is not None,
+                    )
+                except Exception as exc:
+                    # The same guard the source call has, for the same reason:
+                    # a segment is arbitrary audio and arbitrary text through
+                    # the whole model stack, and the run must survive it.
+                    log.warning("Segment %s crashed: %s", seg_id, exc)
+                    seg_result = ClipResult(
+                        passed=False, reject_stage="crash", reject_reason=str(exc)
+                    )
                 seg_result.recovered_by = "split_at_silence"
                 _finalize_clip(
                     seg_id, seg_text, seg_result, item, filt, stats, writer,

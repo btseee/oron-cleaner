@@ -301,6 +301,55 @@ def test_a_refused_split_leaves_the_clip_rejected(tmp_path, monkeypatch):
     assert read_manifest(tmp_path / "corpus") == []
 
 
+def test_a_crashing_split_does_not_stop_the_run(tmp_path, monkeypatch):
+    """`_split_clip` sat outside the try that guards the source `process_clip`,
+    and it is not internally total: it decodes the audio a second time, re-runs
+    the VAD, and reaches `word_timings`, which romanises arbitrary corpus text
+    and zips `strict=True` outside its own try. In a loop that runs for 24-48 h
+    an exception from any of that must cost one clip, not the pass."""
+    def boom(*a, **k):
+        raise RuntimeError("aligner exploded")
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", boom)
+    filt = SplittableFilter(too_long={"text 1"})
+    stats = run(tmp_path / "corpus", split(3), filt)
+
+    assert stats.total == 3
+    assert stats.passed == 2
+    assert stats.stage_counts.get("crash") == 1
+    assert len(read_manifest(tmp_path / "corpus")) == 2
+
+
+def test_a_crashing_segment_does_not_stop_the_run(tmp_path, monkeypatch):
+    """The segment's own `process_clip` was outside the guard too -- a second
+    unprotected trip through the whole model stack, on audio and text the
+    splitter just invented."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
+        ]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+
+    class Exploding(SplittableFilter):
+        def process_clip(self, audio, ground_truth, measure_all=False):
+            if ground_truth == "text 0 a":
+                raise RuntimeError("model exploded")
+            return super().process_clip(audio, ground_truth, measure_all)
+
+    stats = run(tmp_path / "corpus", split(2), Exploding(too_long={"text 0"}))
+
+    # The source's duration rejection, the crashed `_p0`, the passing `_p1`,
+    # and the clip after it -- which is the point: the run got that far.
+    assert stats.total == 4
+    assert stats.passed == 2
+    assert stats.stage_counts.get("crash") == 1
+    assert {r["clip_id"] for r in read_manifest(tmp_path / "corpus")} == {
+        "fake_clip0_p1", "fake_clip1"
+    }
+
+
 def test_a_segment_is_never_split_again(tmp_path, monkeypatch):
     calls = []
 
