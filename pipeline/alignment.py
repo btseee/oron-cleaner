@@ -116,3 +116,44 @@ class ForcedAligner:
             sub = [s.score for s in span]
             out.append(float(np.mean(sub)) if sub else 0.0)
         return out
+
+    def word_timings(self, audio: np.ndarray, text: str) -> list[tuple[str, float, float, float]]:
+        """Per-word `(word, start_seconds, end_seconds, mean_score)`, in transcript order.
+
+        `word_scores` computes exactly this from the same spans and then
+        discards the timing information, keeping only the mean score. A caller
+        that wants to *cut* a clip rather than just judge it needs to know
+        where each word sits in time, so this keeps what `word_scores` throws
+        away. Empty if unalignable -- mirrors `word_scores`'s own guard
+        clauses and except path exactly.
+        """
+        import torch
+
+        words = self.romanize(text)
+        if not words or audio.size < SAMPLE_RATE // 10:
+            return []
+        waveform = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).to(self.device)
+        try:
+            with torch.inference_mode():
+                emission, _ = self._model(waveform)
+                spans = self._aligner(emission[0], self._tokenizer(words))
+        except Exception as exc:
+            log.debug("alignment failed: %s", exc)
+            return []
+
+        # The emission is a downsampled view of the waveform -- MMS_FA emits
+        # roughly one frame per 20 ms of audio, not one frame per sample -- so
+        # a span's frame indices are not sample indices. This ratio rescales a
+        # frame index back to a sample index at the waveform's own rate;
+        # dividing by SAMPLE_RATE then turns that sample index into seconds.
+        ratio = waveform.size(1) / emission.size(1)
+        out = []
+        for word, span in zip(words, spans, strict=True):
+            sub = [s.score for s in span]
+            if not sub:
+                out.append((word, 0.0, 0.0, 0.0))
+                continue
+            start_s = span[0].start * ratio / SAMPLE_RATE
+            end_s = span[-1].end * ratio / SAMPLE_RATE
+            out.append((word, float(start_s), float(end_s), float(np.mean(sub))))
+        return out

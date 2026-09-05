@@ -11,7 +11,7 @@ import os
 import numpy as np
 import pytest
 
-from pipeline.constants import MIN_ALIGN_SCORE
+from pipeline.constants import MIN_ALIGN_SCORE, SAMPLE_RATE
 
 pytest.importorskip("uroman", reason="uroman not installed")
 pytest.importorskip("torchaudio", reason="torchaudio not installed")
@@ -106,3 +106,39 @@ def test_alignment_separates_correct_from_mismatched_transcripts(aligner):
     bad = aligner.score(audio, "огт өөр өгүүлбэр энд байна гэж бодъё")
 
     assert good > MIN_ALIGN_SCORE > bad, (good, bad)
+
+
+# ── word timings ──────────────────────────────────────────────────────────────
+#
+# `word_timings` computes exactly what `word_scores` computes and keeps the
+# span boundaries `word_scores` throws away, so it needs the real model to
+# exercise the frame-to-second conversion -- there is no way to fake torchaudio's
+# span objects without reimplementing them. Not SLOW-gated, matching
+# `test_unalignable_input_returns_nan` above: it needs the same cached
+# checkpoint and no network call, and is fast once that checkpoint is warm.
+
+def _noisy_speech(seconds: float, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return (rng.standard_normal(int(seconds * SAMPLE_RATE)) * 0.1).astype(np.float32)
+
+
+def test_word_timings_is_empty_for_unalignable_input(aligner):
+    """Mirrors word_scores's own guard clauses: no evidence, no timings."""
+    assert aligner.word_timings(np.zeros(16000, dtype=np.float32), "") == []
+    assert aligner.word_timings(np.zeros(10, dtype=np.float32), "сайн байна") == []
+
+
+def test_word_timings_word_count_matches_the_transcript(aligner):
+    text = "сайн байна уу"
+    timings = aligner.word_timings(_noisy_speech(3.0), text)
+    assert len(timings) == len(aligner.romanize(text)) == 3
+
+
+def test_word_timings_are_non_decreasing_and_each_word_ends_at_or_after_it_starts(aligner):
+    timings = aligner.word_timings(_noisy_speech(3.0), "сайн байна уу")
+    assert timings
+    prev_end = 0.0
+    for _word, start, end, _score in timings:
+        assert start >= prev_end - 1e-6
+        assert end >= start
+        prev_end = end
