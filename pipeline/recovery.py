@@ -23,10 +23,18 @@ clips are not the kind any given repair fixes, and saying so costs nothing.
 from __future__ import annotations
 
 from collections.abc import Callable
+from itertools import pairwise
 
 import numpy as np
 
-from .constants import RECOVERY_MIN_DC, RECOVERY_QUIET_PEAK, RECOVERY_TARGET_PEAK
+from .constants import (
+    MAX_DURATION_S,
+    MIN_DURATION_S,
+    RECOVERY_MIN_DC,
+    RECOVERY_QUIET_PEAK,
+    RECOVERY_TARGET_PEAK,
+)
+from .trimming import WEAK_WORD_SCORE
 
 Repair = Callable[[np.ndarray, int, str], "tuple[np.ndarray, int, str] | None"]
 
@@ -136,3 +144,58 @@ def repair_homoglyphs(audio: np.ndarray, sr: int, text: str):
 # shape), this line is where a type checker catches it, rather than nothing
 # noticing until a caller iterating `Repair`s breaks at runtime.
 _REPAIRS: tuple[Repair, ...] = (remove_dc_offset, normalise_gain, repair_homoglyphs)
+
+
+def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
+                     speech_spans: list[tuple[float, float]]):
+    """Cut an over-length clip into segments at the silences between sentences.
+
+    Each segment is the original audio, unmodified; only the boundaries are new.
+    That is what makes this a legal repair -- but it is the one repair that can
+    create a defect rather than fail cleanly, because a split is two new
+    transcripts, and this project publishes the text, scores CER against it and
+    trains on it. A cut at the wrong word is wrong three times.
+
+    So it refuses unless the alignment is confident on the words either side of
+    the cut, every segment lands inside the duration limits, and the segments'
+    transcripts concatenate back to the original.
+    """
+    duration = len(audio) / sr
+    if duration <= MAX_DURATION_S:
+        return None
+    timings = aligner.word_timings(audio, text)
+    if not timings:
+        return None
+
+    gaps = []
+    for i in range(len(timings) - 1):
+        _, _, end, score_a = timings[i]
+        _, start, _, score_b = timings[i + 1]
+        if start - end < MIN_DURATION_S:
+            continue
+        if min(score_a, score_b) < WEAK_WORD_SCORE:
+            # The cut point is the one place the alignment has to be right.
+            return None
+        gaps.append((i, (end + start) / 2.0))
+    if not gaps:
+        return None
+
+    bounds = [0.0] + [t for _, t in gaps] + [duration]
+    words = [w for w, _, _, _ in timings]
+    parts: list[tuple[np.ndarray, int, str]] = []
+    cut_at = [i for i, _ in gaps]
+    first = 0
+    for k, (lo, hi) in enumerate(pairwise(bounds)):
+        if not MIN_DURATION_S <= hi - lo <= MAX_DURATION_S:
+            return None
+        last = cut_at[k] + 1 if k < len(cut_at) else len(words)
+        segment_text = " ".join(words[first:last])
+        if not segment_text:
+            return None
+        parts.append((audio[int(lo * sr):int(hi * sr)].astype("float32"), sr,
+                      segment_text))
+        first = last
+
+    if " ".join(p[2] for p in parts) != " ".join(words):
+        return None                      # a word was lost or duplicated
+    return parts
