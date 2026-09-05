@@ -21,6 +21,25 @@ SAMPLE_RATE: int = 16_000
 # a shared node the oversubscription competes with every other tenant.
 TORCH_THREADS: int = 1
 
+# ── Recovery ──────────────────────────────────────────────────────────────────
+# A repaired clip re-earns its place on the thresholds above; these govern only
+# what a repair is allowed to do. They are uppercase scalars in this module on
+# purpose: FILTER_POLICY_VERSION hashes those, so the recovery configuration
+# lands in the corpus version and two corpora built under different recovery
+# rules cannot share a version string.
+
+# Target peak for gain normalisation. -3 dBFS leaves headroom for the 24 kHz
+# resample on the way out, which can overshoot the original peak.
+RECOVERY_TARGET_PEAK: float = 0.708
+
+# Below this peak a clip is quiet enough that the VAD and the recogniser suffer
+# for a reason that has nothing to do with the speaker. Above it, gain is
+# somebody's deliberate level and not ours to change.
+RECOVERY_QUIET_PEAK: float = 0.2
+
+# A DC offset this small is dither, not a defect worth a second gate pass.
+RECOVERY_MIN_DC: float = 0.001
+
 OUTPUT_SAMPLE_RATE: int = 24_000
 
 OUTPUT_DIR: Path = Path("output")
