@@ -40,6 +40,51 @@ SNR and the SNR is measured again on what remains; the pre-repair number is neve
 carried forward. One repair attempt per failing gate, one re-gate, and then the
 answer stands — no iterating until something passes, which is fishing.
 
+## Measured, before building anything
+
+Per-gate failure rates, `measure_all` so every gate is scored rather than only
+the first to fire. FLEURS 120 clips, Common Voice 80, WorldSpeech 80.
+
+| gate | FLEURS | Common Voice | WorldSpeech |
+| --- | --- | --- | --- |
+| kept | 42% | **74%** | 35% |
+| `cer` | 22% | 0% | 51% |
+| `dnsmos` | 22% | 15% | 20% |
+| `snr` | 26% | 0% | 14% |
+| `bandwidth` | 16% | 11% | 14% |
+| `alignment` | 5% | 0% | 12% |
+| `duration` | 8% | 0% | 8% |
+| `vad` | 2% | 0% | 9% |
+| `clipping` | 0% | 0% | 0% |
+
+**This design is not worth building for Common Voice.** Only two gates fire
+there, and neither is repairable under the rule above: `bandwidth` cannot be
+extended without synthesis, and the failing `dnsmos` values (2.08, 2.18, 2.25,
+2.79 against a threshold near 3.0) are far below what a gain change could lift
+— DNSMOS normalises level internally. Every repair below targets a gate that
+never fired on Common Voice.
+
+Where recovery would pay is **WorldSpeech**: 35% kept, with `duration` 8%,
+`vad` 9% and `alignment` 12% all in repairable territory. That is the corpus
+excluded from the curriculum for being CC-BY-NC.
+
+Three earlier claims in this document were wrong and are corrected here rather
+than quietly edited away:
+
+* Common Voice does **not** reject ~48%. That conflated gate failures with the
+  per-speaker cap and split filtering; the gate rate is about 26%.
+* Trimming to the speech span is **not** the biggest Common Voice lever. It
+  recovers nothing — the VAD already edge-trims, and Common Voice has no `vad`
+  failures at all.
+* Splitting was deprioritised for Common Voice for the wrong reason. It is
+  correctly zero there, but it is 8% on both FLEURS and WorldSpeech.
+
+Caveats: Common Voice was measured as **CV 17** from an ungated mirror, using
+`train.tsv`, because CV 26 needs the Mozilla Data Collective key that is pending
+rotation and `validated.tsv` is what the pipeline actually reads. Same corpus
+family, different release, more curated split. 80 clips is a sample, not a
+census.
+
 ## What is repairable
 
 Measured or reasoned, per gate:
