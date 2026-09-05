@@ -58,6 +58,16 @@ def remove_dc_offset(audio: np.ndarray, sr: int, text: str):
     eats headroom and shifts the clipping ratio, failing a gate that has nothing
     to say about the recording's quality.
     """
+    if audio.size == 0:
+        # Matches dsp.dc_offset()'s own guard: `.mean()` on an empty array is a
+        # RuntimeWarning ("Mean of empty slice"), not a value worth repairing.
+        return None
+    # NaN and inf compare False against everything -- `abs(nan) < x` is False,
+    # same as `nan <= 0.0` below in normalise_gain -- so a single poisoned
+    # sample would otherwise slip past every guard, get "repaired", and leave
+    # the whole clip NaN while looking like a success. Refuse instead.
+    if not np.isfinite(audio).all():
+        return None
     offset = float(audio.mean())
     if abs(offset) < RECOVERY_MIN_DC:
         return None
@@ -75,7 +85,14 @@ def normalise_gain(audio: np.ndarray, sr: int, text: str):
     Only clips below `RECOVERY_QUIET_PEAK` are touched. Above it, the level is
     somebody's deliberate choice.
     """
-    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if audio.size == 0:
+        return None
+    # See remove_dc_offset: NaN/inf comparisons are always False, so without
+    # this guard a poisoned sample reaches `peak`, propagates through the
+    # multiply, and the clip comes back as an all-NaN "repair".
+    if not np.isfinite(audio).all():
+        return None
+    peak = float(np.max(np.abs(audio)))
     if peak <= 0.0 or peak >= RECOVERY_QUIET_PEAK:
         return None
     return (audio * (RECOVERY_TARGET_PEAK / peak)).astype("float32"), sr, text
@@ -112,3 +129,10 @@ def repair_homoglyphs(audio: np.ndarray, sr: int, text: str):
     if not changed:
         return None
     return audio, sr, " ".join(words)
+
+
+# Pins the three functions above to the `Repair` contract: if a signature ever
+# drifts (an extra required argument, a return type outside the tuple-or-None
+# shape), this line is where a type checker catches it, rather than nothing
+# noticing until a caller iterating `Repair`s breaks at runtime.
+_REPAIRS: tuple[Repair, ...] = (remove_dc_offset, normalise_gain, repair_homoglyphs)

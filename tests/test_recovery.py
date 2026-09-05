@@ -12,6 +12,8 @@ speech.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -74,6 +76,31 @@ def test_dither_sized_offsets_are_left_alone():
     assert remove_dc_offset(audio, SAMPLE_RATE, TEXT) is None
 
 
+def test_a_nan_sample_is_refused_not_repaired():
+    """`abs(nan) < RECOVERY_MIN_DC` is False, so without an explicit finite
+    check a single poisoned sample would sail through the guard, turn the
+    whole clip to NaN via the mean subtraction, and come back looking like a
+    successful repair. Refusing beats destroying the clip."""
+    audio = speech()
+    audio[10] = np.nan
+    assert remove_dc_offset(audio, SAMPLE_RATE, TEXT) is None
+
+
+def test_an_infinite_sample_is_refused_not_repaired():
+    audio = speech()
+    audio[10] = np.inf
+    assert remove_dc_offset(audio, SAMPLE_RATE, TEXT) is None
+
+
+def test_an_empty_clip_is_refused_without_a_warning():
+    """The sibling dsp.dc_offset() guards audio.size == 0; without the same
+    guard here, `.mean()` on an empty array raises RuntimeWarning ("Mean of
+    empty slice") and hands back a "repaired" empty tuple."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert remove_dc_offset(np.array([], dtype="float32"), SAMPLE_RATE, TEXT) is None
+
+
 # ── gain ──────────────────────────────────────────────────────────────────────
 
 def test_a_quiet_clip_is_brought_up_to_the_target_peak():
@@ -100,6 +127,21 @@ def test_a_clip_at_a_normal_level_is_left_alone():
 def test_silence_is_not_amplified():
     """Dividing by a zero peak would produce inf, and there is no speech to save."""
     assert normalise_gain(np.zeros(SAMPLE_RATE, "float32"), SAMPLE_RATE, TEXT) is None
+
+
+def test_a_nan_sample_is_refused_not_amplified():
+    """Same failure as remove_dc_offset: `nan >= RECOVERY_QUIET_PEAK` is False,
+    so the poisoned peak would otherwise pass the gate and the multiply would
+    spread NaN across the whole clip, reported as a successful gain fix."""
+    audio = speech(peak=0.02)
+    audio[10] = np.nan
+    assert normalise_gain(audio, SAMPLE_RATE, TEXT) is None
+
+
+def test_an_infinite_sample_is_refused_not_amplified():
+    audio = speech(peak=0.02)
+    audio[10] = np.inf
+    assert normalise_gain(audio, SAMPLE_RATE, TEXT) is None
 
 
 # ── homoglyphs ────────────────────────────────────────────────────────────────
