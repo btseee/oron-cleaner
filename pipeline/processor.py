@@ -391,6 +391,7 @@ def _save_stats(run_name: str, stats: CleaningStats) -> None:
         "total": stats.total,
         "passed": stats.passed,
         "stage_counts": stats.stage_counts,
+        "recovered_counts": stats.recovered_counts,
         "total_duration_s": stats.total_duration_s,
         "sum_dnsmos_ovr": stats.sum_dnsmos_ovr,
         "sum_snr": stats.sum_snr,
@@ -411,6 +412,7 @@ def _load_stats(run_name: str, display_name: str) -> CleaningStats:
     stats.total = d.get("total", 0)
     stats.passed = d.get("passed", 0)
     stats.stage_counts = d.get("stage_counts", {})
+    stats.recovered_counts = d.get("recovered_counts", {})
     stats.total_duration_s = d.get("total_duration_s", 0.0)
     stats.sum_dnsmos_ovr = d.get("sum_dnsmos_ovr", 0.0)
     stats.sum_snr = d.get("sum_snr", 0.0)

@@ -34,6 +34,11 @@ class CleaningStats:
         self.total: int = 0
         self.passed: int = 0
         self.stage_counts: dict[str, int] = {}
+        # Kept clips by the repair that produced them, e.g. "split_at_silence".
+        # A corpus that is 30% repaired material has a different character from
+        # one that is not, even when every clip passed the same gates, so the
+        # share is reported rather than absorbed.
+        self.recovered_counts: dict[str, int] = {}
         self.total_duration_s: float = 0.0
         self.sum_dnsmos_ovr: float = 0.0
         self.sum_snr: float = 0.0
@@ -47,6 +52,12 @@ class CleaningStats:
             self.sum_dnsmos_ovr += result.dnsmos_ovr
             self.sum_snr += result.snr_db
             self.sum_cer += result.cer
+            if result.recovered_by:
+                # Only kept clips: the interesting number is what share of the
+                # corpus a repair put there, not how often one was attempted.
+                self.recovered_counts[result.recovered_by] = (
+                    self.recovered_counts.get(result.recovered_by, 0) + 1
+                )
         else:
             self.stage_counts[result.reject_stage] = (
                 self.stage_counts.get(result.reject_stage, 0) + 1
@@ -62,6 +73,8 @@ class CleaningStats:
         self.sum_cer += other.sum_cer
         for stage, count in other.stage_counts.items():
             self.stage_counts[stage] = self.stage_counts.get(stage, 0) + count
+        for repair, count in other.recovered_counts.items():
+            self.recovered_counts[repair] = self.recovered_counts.get(repair, 0) + count
 
     def report(self) -> str:
         lines = [
@@ -96,6 +109,15 @@ class CleaningStats:
         hours = self.total_duration_s / 3600.0
         lines.append(f"Total PASSED (clean):       {self.passed:>8,}  ({pct:.1f}% of input)")
         lines.append(f"Total hours (clean):        {hours:>10.2f} hours")
+        # How much of the kept corpus exists only because a repair ran. Reported
+        # for every run, so "no clip was recovered" is a measurement rather than
+        # a line that happened not to print.
+        for repair, count in sorted(self.recovered_counts.items()):
+            label = f"Recovered — {repair}:"
+            share = 100.0 * count / max(self.passed, 1)
+            lines.append(f"{label:<28}{count:>8,}  ({share:.1f}% of kept)")
+        if not self.recovered_counts:
+            lines.append(f"{'Recovered — none:':<28}{0:>8,}")
         if self.passed > 0:
             lines.append(f"Average DNSMOS OVR:         {self.sum_dnsmos_ovr/self.passed:>10.3f}")
             lines.append(f"Average SNR:                {self.sum_snr/self.passed:>10.1f} dB")

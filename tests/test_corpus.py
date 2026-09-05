@@ -151,6 +151,27 @@ def test_summary_fails_a_thin_male_corpus():
     assert "male speakers >= 3       FAIL" in text
 
 
+def test_summary_reports_the_recovered_fraction():
+    """A corpus that is part repaired material has a different character from
+    one that is not, even when every clip passed the same gates. `recovered_by`
+    reached the manifest from the day splitting shipped and nothing ever printed
+    it, so the difference was absorbed rather than visible."""
+    splits = {
+        "train": [{"client_id": "a", "duration_s": 5.0,
+                   "recovered_by": "split_at_silence"}]
+                 + [{"client_id": "a", "duration_s": 5.0, "recovered_by": ""}
+                    for _ in range(3)],
+    }
+    text = summarise(splits)
+    assert "split_at_silence" in text
+    assert "25.0% of kept" in text
+
+
+def test_summary_says_so_when_no_clip_was_recovered():
+    splits = {"train": [{"client_id": "a", "duration_s": 5.0}]}
+    assert "none — every kept clip passed as recorded" in summarise(splits)
+
+
 # ── text diversity ────────────────────────────────────────────────────────────
 
 def test_diversity_reports_sentence_repetition():

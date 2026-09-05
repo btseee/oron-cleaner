@@ -445,6 +445,23 @@ def test_resume_false_re_splits_a_source_it_already_consumed(tmp_path, monkeypat
     assert second.seen == ["text 0", "text 0 a"]
 
 
+def test_the_recovered_count_survives_a_restart(tmp_path, monkeypatch):
+    """The recovered share is read off the stats checkpoint like every other
+    count, and the source is not re-split on the second run -- so a counter left
+    out of the checkpoint would report zero recovered clips for any run that was
+    ever resumed, which is every long one."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    corpus = tmp_path / "corpus"
+    first = run(corpus, split(1), SplittableFilter(too_long={"text 0"}))
+    assert first.recovered_counts == {"split_at_silence": 1}
+
+    resumed = run(corpus, split(2), SplittableFilter(too_long={"text 0"}))
+    assert resumed.recovered_counts == {"split_at_silence": 1}
+
+
 def test_a_segment_keeps_its_provenance_when_normalisation_refuses(tmp_path, monkeypatch):
     """The refusal path builds a fresh ClipResult, so the field has to be
     carried across by hand. The rejection log is where the yield of a repair is
