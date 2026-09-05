@@ -56,6 +56,6 @@ def test_filter_pins_torch_to_one_thread(monkeypatch):
                              "exercising the path it claims to")
 
     assert torch.get_num_threads() == af.TORCH_THREADS == 1, (
-        "torch is on %d threads; measured, that makes alignment up to twelve "
-        "times slower" % torch.get_num_threads())
+        f"torch is on {torch.get_num_threads()} threads; measured, that makes "
+        "alignment up to twelve times slower")
     torch.set_num_threads(before)

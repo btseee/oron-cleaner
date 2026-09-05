@@ -41,7 +41,6 @@ from oron_tts.text import MongolianNormalizer
 from .alignment import ForcedAligner
 from .clip_result import ClipResult
 from .constants import (
-    TORCH_THREADS,
     DNSMOS_MIN_BAK,
     DNSMOS_MIN_OVR,
     DNSMOS_MIN_SIG,
@@ -54,6 +53,7 @@ from .constants import (
     OUTPUT_SAMPLE_RATE,
     SAMPLE_RATE,
     SNR_MIN_DB,
+    TORCH_THREADS,
     VAD_MIN_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
     VAD_MIN_SPEECH_RATIO,
@@ -108,7 +108,6 @@ class AudioQualityFilter:
         # limitation here, it is the fast path -- so it is set deliberately and
         # kept, rather than left to a side effect of an unrelated import.
         import torch
-
         from silero_vad import load_silero_vad
 
         self._vad_model = load_silero_vad()
