@@ -333,12 +333,31 @@ def test_a_segment_carries_its_recovery_provenance(tmp_path, monkeypatch):
     assert manifest[0]["recovered_by"] == "split_at_silence"
 
 
-def test_a_split_source_is_not_re_split_on_every_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("rejected_segments", "kept"),
+    [
+        (set(), 2),
+        ({"text 0 a"}, 1),
+        ({"text 0 b"}, 1),
+        ({"text 0 a", "text 0 b"}, 0),
+    ],
+    ids=["every-segment-passes", "first-segment-fails",
+         "last-segment-fails", "every-segment-fails"],
+)
+def test_a_split_source_is_not_re_split_on_every_restart(
+    tmp_path, monkeypatch, rejected_segments, kept
+):
     """Resume skips a clip whose id is in the writer, and a split source's own
-    id is never written -- only `_p0`, `_p1`. So each restart re-decoded it,
-    re-split it, re-ran the model stack on every segment and appended a second
-    copy of every count. Measured over three runs of one clip: total 3, 6, 9
-    and passed 2, 4, 6, against a corpus of two."""
+    id is never written -- only `_p0`, `_p1`, and only for the segments that
+    passed. So each restart re-decoded the source, re-split it, re-ran the model
+    stack on every segment and appended a second copy of every count.
+
+    Recognising `_p0` in the writer covered only the case where segment 0
+    happened to pass. Measured over three runs of one clip with `_p0` rejected
+    and `_p1` passing: total 3, 6, 9 and passed 1, 2, 3 -- and with every
+    segment rejected, nothing named after the source exists at all. Hence all
+    three cases here: what has to survive a restart is that the source was
+    *consumed*, which is independent of what its segments earned."""
     def fake_split(audio, sr, text, *, aligner, speech_spans):
         return [
             (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
@@ -350,16 +369,31 @@ def test_a_split_source_is_not_re_split_on_every_restart(tmp_path, monkeypatch):
 
     totals, passes, work = [], [], []
     for _ in range(3):
-        filt = SplittableFilter(too_long={"text 0"})
+        filt = SplittableFilter(too_long={"text 0"}, reject=rejected_segments)
         stats = run(corpus, split(1), filt)
         totals.append(stats.total)
         passes.append(stats.passed)
         work.append(len(filt.seen))
 
     assert totals == [3, 3, 3]
-    assert passes == [2, 2, 2]
+    assert passes == [kept, kept, kept]
     assert work[1:] == [0, 0], "a restart re-ran the model stack on a split clip"
-    assert len(read_manifest(corpus)) == 2
+    assert len(read_manifest(corpus)) == kept
+
+
+def test_resume_false_re_splits_a_source_it_already_consumed(tmp_path, monkeypatch):
+    """The record of consumed sources is a resume artifact, so `resume=False`
+    must not let a previous run's copy of it suppress work in this one."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    corpus = tmp_path / "corpus"
+    run(corpus, split(1), SplittableFilter(too_long={"text 0"}))
+
+    second = SplittableFilter(too_long={"text 0"})
+    run(tmp_path / "fresh", split(1), second, resume=False)
+    assert second.seen == ["text 0", "text 0 a"]
 
 
 def test_a_segment_keeps_its_provenance_when_normalisation_refuses(tmp_path, monkeypatch):

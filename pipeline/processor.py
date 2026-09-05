@@ -78,6 +78,15 @@ def process_split(
         OUTPUT_DIR / "logs" / f"rejected_{run_name}.csv", append=resume
     )
 
+    # Which sources splitting has already consumed. Recorded on its own because
+    # nothing else on disk can answer the question: the writer holds only clips
+    # that passed, and the reject log cannot tell a consumed source from one
+    # whose split was refused -- both are `duration`/`too_long`.
+    consumed_path = _consumed_path(run_name)
+    if not resume and consumed_path.exists():
+        consumed_path.unlink()
+    consumed = _load_consumed(consumed_path) if resume else set()
+
     total = len(split_dataset)
     if limit is not None:
         total = min(total, limit)
@@ -91,11 +100,19 @@ def process_split(
 
         # A split source's own id is never written: the corpus gets
         # `{clip_id}_p0`, `_p1`, ... and the source is only ever a rejection.
-        # Without the second test every restart re-decodes it, re-splits it,
-        # re-runs the whole model stack on each segment, and adds a fresh copy
-        # of the source's rejection and its segments' results to the stats and
-        # the reject log -- forever.
-        if clip_id in writer or f"{clip_id}_p0" in writer:
+        # And every segment has to re-earn its place, so when `_p0` is rejected
+        # and `_p1` passes -- or when every segment is rejected -- nothing on
+        # disk is named after the source at all. Without the `consumed` test
+        # every restart then re-decodes it, re-splits it, re-runs the whole
+        # model stack on each segment, and adds a fresh copy of the source's
+        # rejection and its segments' results to the stats and the reject log.
+        # Measured with `_p0` failing and `_p1` passing over three runs of one
+        # clip: total 3, 6, 9 and passed 1, 2, 3.
+        #
+        # `_p0 in writer` stays for corpora written before the sidecar existed:
+        # their consumed sources are absent from it, and would otherwise all be
+        # split a second time on the next restart.
+        if clip_id in writer or clip_id in consumed or f"{clip_id}_p0" in writer:
             continue
 
         ground_truth = item.get(text_field, "") or ""
@@ -142,6 +159,12 @@ def process_split(
                     seg_id, seg_text, seg_result, item, filt, stats, writer,
                     reject_log, extra_fields, field_renames, calibration,
                 )
+
+            # Recorded once every segment has been resolved rather than before
+            # the loop, so a crash part-way through costs one clip's re-work on
+            # the next run instead of abandoning the segments it never reached.
+            consumed.add(clip_id)
+            _record_consumed(consumed_path, clip_id)
         else:
             _finalize_clip(
                 clip_id, ground_truth, result, item, filt, stats, writer,
@@ -157,6 +180,38 @@ def process_split(
     _save_stats(run_name, stats)
     reject_log.close()
     return stats
+
+
+def _consumed_path(run_name: str) -> Path:
+    """Where the ids of sources consumed by splitting are kept.
+
+    Beside the stats checkpoint and namespaced the same way, so it is
+    invalidated by a policy change for exactly the same reason the stats are:
+    which clips split is a function of the recovery constants, and those are
+    hashed into `FILTER_POLICY_VERSION`.
+    """
+    return OUTPUT_DIR / "checkpoints" / f"{run_name}.split_sources.txt"
+
+
+def _load_consumed(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def _record_consumed(path: Path, clip_id: str) -> None:
+    """Append one consumed source id, durably.
+
+    Opened and closed per call rather than held for the run: splitting fires on
+    a few per cent of clips at most, so the cost is nothing, and it is one less
+    handle to leak down a path that can raise.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(clip_id + "\n")
 
 
 def _clip_id(item: dict, dataset_name: str, split_name: str, idx: int) -> str:
