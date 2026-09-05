@@ -325,6 +325,97 @@ def test_a_segment_carries_its_recovery_provenance(tmp_path, monkeypatch):
     assert manifest[0]["recovered_by"] == "split_at_silence"
 
 
+def test_a_split_source_is_not_re_split_on_every_restart(tmp_path, monkeypatch):
+    """Resume skips a clip whose id is in the writer, and a split source's own
+    id is never written -- only `_p0`, `_p1`. So each restart re-decoded it,
+    re-split it, re-ran the model stack on every segment and appended a second
+    copy of every count. Measured over three runs of one clip: total 3, 6, 9
+    and passed 2, 4, 6, against a corpus of two."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
+            (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
+        ]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+    corpus = tmp_path / "corpus"
+
+    totals, passes, work = [], [], []
+    for _ in range(3):
+        filt = SplittableFilter(too_long={"text 0"})
+        stats = run(corpus, split(1), filt)
+        totals.append(stats.total)
+        passes.append(stats.passed)
+        work.append(len(filt.seen))
+
+    assert totals == [3, 3, 3]
+    assert passes == [2, 2, 2]
+    assert work[1:] == [0, 0], "a restart re-ran the model stack on a split clip"
+    assert len(read_manifest(corpus)) == 2
+
+
+def test_a_segment_keeps_its_provenance_when_normalisation_refuses(tmp_path, monkeypatch):
+    """The refusal path builds a fresh ClipResult, so the field has to be
+    carried across by hand. The rejection log is where the yield of a repair is
+    read off -- silently dropping it there understates what splitting cost."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+
+    # Recorded from the stats, because the refusal path *replaces* the result
+    # object -- watching the one handed in would show the field it never lost.
+    from pipeline.stats import CleaningStats
+
+    recorded = []
+    real_record = CleaningStats.record
+
+    def spy(self, result):
+        recorded.append((result.reject_stage, result.recovered_by))
+        return real_record(self, result)
+
+    monkeypatch.setattr(CleaningStats, "record", spy)
+
+    filt = SplittableFilter(too_long={"text 0"})
+    filt.normalized_text = _raise_for("text 0 a")
+    run(tmp_path / "corpus", split(1), filt)
+
+    assert ("normalize", "split_at_silence") in recorded
+
+
+def _raise_for(bad: str):
+    def normalized_text(text: str) -> str:
+        if text == bad:
+            raise ValueError(f"no verified form for {text!r}")
+        return text.upper()
+    return normalized_text
+
+
+def test_a_segment_is_measured_on_every_gate_during_calibration(tmp_path, monkeypatch):
+    """calibrate.py's whole value is that every clip is scored by every gate.
+    A segment stopped at its first failure biases the per-gate rates it feeds,
+    silently, in the one mode whose output is used to move thresholds."""
+    def fake_split(audio, sr, text, *, aligner, speech_spans):
+        return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
+
+    monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
+
+    class Recording(SplittableFilter):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.modes: list[tuple[str, bool]] = []
+
+        def process_clip(self, audio, ground_truth, measure_all=False):
+            self.modes.append((ground_truth, measure_all))
+            return super().process_clip(audio, ground_truth, measure_all)
+
+    from pipeline.calibrate import Calibration
+
+    filt = Recording(too_long={"text 0"})
+    run(tmp_path / "corpus", split(1), filt, calibration=Calibration())
+    assert filt.modes == [("text 0", True), ("text 0 a", True)]
+
+
 # ── the real split, through the real call site ─────────────────────────────
 #
 # Every wiring test above monkeypatches `split_at_silence` with a fake that

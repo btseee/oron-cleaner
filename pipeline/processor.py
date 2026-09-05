@@ -89,7 +89,13 @@ def process_split(
         item = split_dataset[idx]
         clip_id = _clip_id(item, dataset_name, split_name, idx)
 
-        if clip_id in writer:
+        # A split source's own id is never written: the corpus gets
+        # `{clip_id}_p0`, `_p1`, ... and the source is only ever a rejection.
+        # Without the second test every restart re-decodes it, re-splits it,
+        # re-runs the whole model stack on each segment, and adds a fresh copy
+        # of the source's rejection and its segments' results to the stats and
+        # the reject log -- forever.
+        if clip_id in writer or f"{clip_id}_p0" in writer:
             continue
 
         ground_truth = item.get(text_field, "") or ""
@@ -125,7 +131,11 @@ def process_split(
             for i, (seg_audio, seg_sr, seg_text) in enumerate(segments):
                 seg_id = f"{clip_id}_p{i}"
                 seg_result = filt.process_clip(
-                    {"array": seg_audio, "sampling_rate": seg_sr}, seg_text
+                    {"array": seg_audio, "sampling_rate": seg_sr}, seg_text,
+                    # Calibration's whole value is that every clip is scored by
+                    # every gate; a segment measured only to its first failure
+                    # would bias the per-gate rates it feeds.
+                    measure_all=calibration is not None,
                 )
                 seg_result.recovered_by = "split_at_silence"
                 _finalize_clip(
@@ -235,7 +245,11 @@ def _finalize_clip(
             text = filt.normalized_text(ground_truth)
         except Exception as exc:
             result = ClipResult(
-                passed=False, reject_stage="normalize", reject_reason=str(exc)
+                passed=False, reject_stage="normalize", reject_reason=str(exc),
+                # A fresh result, so carry the provenance across by hand: a
+                # segment whose text is refused is still a segment, and the
+                # rejection log is where the yield of a repair is read off.
+                recovered_by=result.recovered_by,
             )
 
     stats.record(result)
