@@ -46,7 +46,7 @@ Measured or reasoned, per gate:
 
 | gate | repair | why it is information-preserving |
 | --- | --- | --- |
-| `snr`, `dnsmos` | trim to the aligned speech span | Both are computed over the whole clip, so a long room-tone lead-in drags them down while the speech is untouched. Removing non-speech removes no speech. |
+| `vad speech_ratio` | apply the edge trim the VAD already computed | The ratio is measured on the **untrimmed** clip (`audio_filter.py:215`) and rejected at `audio_filter.py:216`, *before* `edge_trim_bounds` runs at `:222`. So a clip with three seconds of speech inside ten seconds of lead-in scores 0.30, fails the 0.35 gate, and is discarded — while the edge-trimmed version would pass everything. The trim keeps interior pauses and removes only non-speech at the edges. |
 | `duration too_long` | split at internal silence | Each segment is the original audio, unmodified; only the boundaries are new. |
 | `clipping dc_offset` | subtract the mean | Exact. A DC offset is an additive constant with one correct removal. |
 | `dnsmos`, `cer`, `vad` | normalise gain to a target peak | A scalar multiply changes no information. Crowd-sourced clips are often too quiet for the VAD to find speech or the recogniser to read it. |
@@ -67,6 +67,10 @@ handles typography. A repair for it would recover nothing; it stays out.
 
 Recorded so the question stays settled:
 
+* `snr` and `dnsmos` by edge trimming — **already done.** `_run_vad` edge-trims
+  before either is measured (`audio_filter.py:222`), so a repair here would
+  recover nothing. This was in an earlier draft of this design and was removed
+  after reading the code rather than assuming it.
 * `duration too_short` — the audio is not there.
 * `vad` with no speech found — likewise.
 * `bandwidth` — extension is synthesis.
