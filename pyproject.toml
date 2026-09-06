@@ -33,6 +33,11 @@ dependencies = [
     "torchcodec>=0.3.0",
     "librosa>=0.11.0",
     "soundfile>=0.13.1",
+    # The single resample from source rate to 24 kHz. Bandlimited, so
+    # anti-aliasing is intrinsic; librosa's default would need resampy, which is
+    # ~20x slower at equal quality. Imported directly by audio_filter, so it is a
+    # direct dependency rather than something inherited from librosa.
+    "soxr>=0.5.0",
     "datasets[audio]>=4.8.5",
     "huggingface_hub>=1.16.1",
     "jiwer>=4.0.0",
