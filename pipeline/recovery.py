@@ -41,7 +41,8 @@ from .constants import (
 
 
 def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
-                     speech_spans: list[tuple[float, float]]):
+                     speech_spans: list[tuple[float, float]],
+                     cut_audio: np.ndarray | None = None, cut_sr: int = 0):
     """Cut an over-length clip into segments at the silences between sentences.
 
     Each segment is the original audio, unmodified; only the boundaries are new.
@@ -53,6 +54,12 @@ def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
     So it refuses unless the alignment is confident on the words either side of
     the cut, every segment lands inside the duration limits, and the segments'
     transcripts concatenate back to the original.
+
+    `audio`/`sr` is the 16 kHz signal the aligner and the VAD must see. Pass
+    `cut_audio`/`cut_sr` to slice the segments out of the source-rate signal
+    instead: cut points are decided in seconds, so they carry across rates
+    unchanged, and a split clip then keeps the bandwidth its source had rather
+    than inheriting the aligner's 16 kHz.
 
     A word-timing gap alone is not enough evidence of silence: it can be the
     alignment jittering at a boundary rather than an actual pause. `speech_spans`
@@ -90,6 +97,7 @@ def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
     if not gaps:
         return None
 
+    src, src_sr = (cut_audio, cut_sr) if cut_audio is not None and cut_sr else (audio, sr)
     bounds = [0.0] + [t for _, t in gaps] + [duration]
     words = [w for w, _, _, _ in timings]
     parts: list[tuple[np.ndarray, int, str]] = []
@@ -102,8 +110,8 @@ def split_at_silence(audio: np.ndarray, sr: int, text: str, *, aligner,
         segment_text = " ".join(words[first:last])
         if not segment_text:
             return None
-        parts.append((audio[int(lo * sr):int(hi * sr)].astype("float32"), sr,
-                      segment_text))
+        parts.append((src[int(lo * src_sr):int(hi * src_sr)].astype("float32"),
+                      src_sr, segment_text))
         first = last
 
     # Against `text`, the transcript that came in -- not against `words`, which

@@ -104,10 +104,20 @@ class RealSplitFilter:
         self._aligner = _real_aligner()
         self._normalizer = MongolianNormalizer()
 
+    NATIVE_SR = 48_000
+
     def _load_audio(self, audio_input):
+        """16 kHz for the aligner, 48 kHz for the cut -- the real shape.
+
+        Deliberately not the same array at the same rate: a split has to slice
+        the source-rate signal, and a fake that returns one 16 kHz array for
+        both would pass whether or not that wiring exists.
+        """
         rng = np.random.default_rng(0)
         n = int(OVER_LENGTH_S * SAMPLE_RATE)
-        return (rng.standard_normal(n) * 0.3).astype(np.float32), ""
+        work = (rng.standard_normal(n) * 0.3).astype(np.float32)
+        native = np.repeat(work, self.NATIVE_SR // SAMPLE_RATE)
+        return work, native, self.NATIVE_SR, ""
 
     def _run_vad(self, audio):
         spans = [
@@ -130,7 +140,11 @@ def test_an_over_length_clip_really_splits():
     assert len(parts) == 2
     assert " ".join(p[2] for p in parts) == text
     for audio, sr, _ in parts:
-        assert sr == SAMPLE_RATE
+        # Source rate, not the aligner's 16 kHz. The cut is decided in seconds
+        # on the working signal and applied to the native one, so a split clip
+        # keeps the bandwidth its source had instead of inheriting the 16 kHz
+        # the forced aligner happens to require.
+        assert sr == RealSplitFilter.NATIVE_SR
         assert MIN_DURATION_S <= len(audio) / sr <= MAX_DURATION_S
 
 

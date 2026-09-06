@@ -32,6 +32,7 @@ import logging
 
 import librosa
 import numpy as np
+import soxr
 from oron_tts.text import MongolianNormalizer
 
 # The model stack is imported where it is used, not here. It costs roughly 3 GB
@@ -83,8 +84,11 @@ ASR_MODEL = "bayartsogt/wav2vec2-large-xlsr-mongolian"
 def _decode_with_ffmpeg(path) -> tuple[np.ndarray, int]:
     """Decode any container ffmpeg understands, as a fallback for torchaudio.
 
-    Returns mono float32 at the pipeline's own sample rate, so the caller's
-    resample step becomes a no-op rather than a second conversion.
+    Returns mono float32 at the file's OWN sample rate. Pinning `-ar` here is
+    what censored the corpus: it lowpassed every source to 8 kHz before a single
+    measurement ran, so `bandwidth_hz` could not exceed 8 kHz by construction
+    and the published 24 kHz files were upsampled from an 8 kHz-limited signal.
+    The caller resamples once, deliberately, and measures before it does.
     """
     import io
     import subprocess
@@ -93,7 +97,7 @@ def _decode_with_ffmpeg(path) -> tuple[np.ndarray, int]:
 
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
-         "-f", "wav", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"],
+         "-f", "wav", "-ac", "1", "pipe:1"],
         capture_output=True, check=True)
     audio, sr = sf.read(io.BytesIO(proc.stdout), dtype="float32")
     if audio.size == 0:
@@ -235,8 +239,20 @@ class AudioQualityFilter:
 
     # ── Stage 1 ── Format normalisation ───────────────────────────────────
 
-    def _load_audio(self, audio_input) -> tuple[np.ndarray | None, str]:
-        """Accept a HuggingFace Audio dict, a torchcodec decoder, or a path."""
+    def _load_audio(
+        self, audio_input
+    ) -> tuple[np.ndarray | None, np.ndarray | None, int, str]:
+        """Accept a HuggingFace Audio dict, a torchcodec decoder, or a path.
+
+        Returns `(work, native, native_sr, error)`.
+
+        `work` is 16 kHz because every model downstream requires it -- silero
+        VAD, wav2vec2, MMS_FA and DNSMOS are all 16 kHz-only, so this is not a
+        choice the pipeline can make differently. `native` is the same signal at
+        the rate it was recorded at, kept so that bandwidth is measured on the
+        real spectrum and the published file is resampled once from the source
+        rather than from a signal already truncated to 8 kHz.
+        """
         import torchaudio
 
         try:
@@ -264,11 +280,13 @@ class AudioQualityFilter:
                     # costs a subprocess per clip and is only reached when
                     # torchaudio has already refused.
                     arr, sr = _decode_with_ffmpeg(audio_input)
-            if sr != SAMPLE_RATE:
-                arr = librosa.resample(arr, orig_sr=sr, target_sr=SAMPLE_RATE)
-            return arr.astype(np.float32), ""
+            native = arr.astype(np.float32)
+            if sr == SAMPLE_RATE:
+                return native, native, sr, ""
+            work = soxr.resample(native, sr, SAMPLE_RATE, quality="VHQ")
+            return work.astype(np.float32), native, sr, ""
         except Exception as exc:
-            return None, str(exc)
+            return None, None, 0, str(exc)
 
     # ── Stage 4 ── Voice activity, edge-trim only ─────────────────────────
 
@@ -380,9 +398,19 @@ class AudioQualityFilter:
 
     # ── Stage 10 ── Output preparation ────────────────────────────────────
 
-    def _prepare_output_audio(self, audio: np.ndarray) -> np.ndarray:
-        resampled = librosa.resample(
-            audio, orig_sr=SAMPLE_RATE, target_sr=OUTPUT_SAMPLE_RATE
+    def _prepare_output_audio(self, audio: np.ndarray, sr: int) -> np.ndarray:
+        """Resample once, from the source rate, with a bandlimited kernel.
+
+        `sr` is the file's own rate, not the 16 kHz working rate. soxr VHQ
+        rather than librosa's default: it is bandlimited (so anti-aliasing is
+        intrinsic and a separate filter would be wrong), and it is roughly 20x
+        faster than resampy's kaiser_best at equal quality. Never use
+        `polyphase`, `linear` or `zero_order_hold` here -- they are not
+        bandlimited and alias audibly.
+        """
+        resampled = (
+            audio if sr == OUTPUT_SAMPLE_RATE
+            else soxr.resample(audio, sr, OUTPUT_SAMPLE_RATE, quality="VHQ")
         )
         peak = float(np.abs(resampled).max())
         if peak < 1e-8:
@@ -410,7 +438,7 @@ class AudioQualityFilter:
         m: dict = {}
         failed: list[tuple[str, str]] = []
 
-        def done(audio_out=None) -> ClipResult:
+        def done(audio_out=None, out_sr: int = SAMPLE_RATE) -> ClipResult:
             stage, reason = failed[0] if failed else ("", "")
             return ClipResult(
                 passed=not failed,
@@ -418,7 +446,7 @@ class AudioQualityFilter:
                 reject_reason=reason,
                 failed_gates=[f"{st}:{rs}" for st, rs in failed],
                 audio_normalized=(
-                    self._prepare_output_audio(audio_out)
+                    self._prepare_output_audio(audio_out, out_sr)
                     if audio_out is not None and not failed
                     else np.zeros(1, dtype=np.float32)
                 ),
@@ -430,10 +458,11 @@ class AudioQualityFilter:
             failed.append((stage, reason))
             return measure_all
 
-        audio, err = self._load_audio(audio_input)
+        audio, native, native_sr, err = self._load_audio(audio_input)
         if audio is None:
             note("load", err)
             return done()
+        m["native_sr"] = native_sr
 
         raw_duration = len(audio) / SAMPLE_RATE
         if raw_duration < MIN_DURATION_S and not note("duration", f"too_short_{raw_duration:.2f}s"):
@@ -454,6 +483,21 @@ class AudioQualityFilter:
             # nothing downstream can measure.
             note("vad", reason)
             return done()
+
+        # The VAD runs at 16 kHz because silero is 16 kHz-only, so its bounds
+        # are 16 kHz sample indices. Carry the same cut to the native signal by
+        # time rather than by index, and clamp: rounding at a high native rate
+        # can otherwise run one sample past the end.
+        if native is audio:
+            native_trimmed = trimmed
+        else:
+            scale = native_sr / SAMPLE_RATE
+            lo, hi = edge_trim_bounds(timestamps)
+            native_trimmed = native[
+                max(0, int(lo * scale)):min(len(native), int(hi * scale))
+            ]
+            if native_trimmed.size == 0:          # degenerate slice: fall back
+                native_trimmed, native_sr = trimmed, SAMPLE_RATE
 
         # The duration of the audio actually shipped. The previous
         # implementation reported the pre-VAD length, inflating this column and
@@ -485,7 +529,10 @@ class AudioQualityFilter:
             if snr < SNR_MIN_DB and not note("snr", f"snr_{snr:.1f}dB"):
                 return done()
 
-        bandwidth = measure_bandwidth(trimmed)
+        # Measured on the NATIVE signal, before any resample. Measuring the
+        # 16 kHz working array is what capped this column at 8 kHz for every
+        # corpus and made it useless for ranking prompts or comparing sources.
+        bandwidth = measure_bandwidth(native_trimmed, native_sr)
         m["bandwidth_hz"] = bandwidth
         if bandwidth < MIN_BANDWIDTH_HZ and not note(
             "bandwidth", f"bandwidth_{bandwidth:.0f}Hz"
@@ -543,4 +590,4 @@ class AudioQualityFilter:
         if not reading_ok:
             note("cer", reason)
 
-        return done(trimmed)
+        return done(native_trimmed, native_sr)

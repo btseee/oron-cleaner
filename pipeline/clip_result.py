@@ -47,6 +47,11 @@ class ClipResult:
     # reference-voice selection needs the brightest clips available and no
     # Mongolian source is full-band.
     bandwidth_hz: float = 0.0
+    # The rate the clip was decoded at, before the single resample to
+    # OUTPUT_SAMPLE_RATE. Recorded because `bandwidth_hz` cannot be read
+    # without it: a measurement can never exceed this rate's Nyquist, which is
+    # exactly how every pre-2.0.0 corpus came to be capped at 8 kHz.
+    native_sr: int = 0
     # Duration of the audio actually shipped, after edge-trimming.
     duration_s: float = 0.0
     audio_normalized: np.ndarray = field(default_factory=lambda: np.zeros(1))

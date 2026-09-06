@@ -31,7 +31,11 @@ if str(ROOT) not in sys.path:
 pytest.importorskip("soundfile")
 
 from pipeline.clip_result import ClipResult  # noqa: E402
-from pipeline.constants import OUTPUT_SAMPLE_RATE  # noqa: E402
+from pipeline.constants import (  # noqa: E402
+    MAX_DURATION_S,
+    OUTPUT_SAMPLE_RATE,
+    SAMPLE_RATE,
+)
 from pipeline.corpus import CorpusWriter, read_manifest  # noqa: E402
 from pipeline.processor import process_split  # noqa: E402
 
@@ -102,7 +106,11 @@ class SplittableFilter:
         )
 
     def _load_audio(self, audio_input):
-        return np.zeros(1, dtype=np.float32), ""
+        # Long enough for the VAD spans below to index into, and long enough
+        # that a split has something to slice. A single sample made every
+        # segment empty once the cut moved onto this array.
+        a = np.zeros(int(MAX_DURATION_S * SAMPLE_RATE) + SAMPLE_RATE, dtype=np.float32)
+        return a, a, SAMPLE_RATE, ""
 
     def _run_vad(self, audio):
         # Silero's shape: sample indices, two speech spans with a silence
@@ -240,7 +248,7 @@ def test_nothing_is_written_outside_the_temporary_directory(tmp_path):
 
 
 def test_a_clean_split_produces_its_segments_and_not_the_source(tmp_path, monkeypatch):
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [
             (np.zeros(1, dtype=np.float32), 16000, f"{text} a"),
             (np.zeros(1, dtype=np.float32), 16000, f"{text} b"),
@@ -259,7 +267,7 @@ def test_a_clean_split_produces_its_segments_and_not_the_source(tmp_path, monkey
 
 
 def test_a_failing_segment_does_not_block_its_passing_siblings(tmp_path, monkeypatch):
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [
             (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
             (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
@@ -276,7 +284,7 @@ def test_a_failing_segment_does_not_block_its_passing_siblings(tmp_path, monkeyp
 def test_a_rejection_for_any_other_reason_is_never_split(tmp_path, monkeypatch):
     calls = []
 
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         calls.append(text)
         return None
 
@@ -324,7 +332,7 @@ def test_a_crashing_segment_does_not_stop_the_run(tmp_path, monkeypatch):
     """The segment's own `process_clip` was outside the guard too -- a second
     unprotected trip through the whole model stack, on audio and text the
     splitter just invented."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [
             (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
             (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
@@ -353,7 +361,7 @@ def test_a_crashing_segment_does_not_stop_the_run(tmp_path, monkeypatch):
 def test_a_segment_is_never_split_again(tmp_path, monkeypatch):
     calls = []
 
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         calls.append(text)
         return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
 
@@ -371,7 +379,7 @@ def test_a_segment_is_never_split_again(tmp_path, monkeypatch):
 
 
 def test_a_segment_carries_its_recovery_provenance(tmp_path, monkeypatch):
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [(np.zeros(1, dtype=np.float32), 16000, f"{text} a")]
 
     monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
@@ -407,7 +415,7 @@ def test_a_split_source_is_not_re_split_on_every_restart(
     segment rejected, nothing named after the source exists at all. Hence all
     three cases here: what has to survive a restart is that the source was
     *consumed*, which is independent of what its segments earned."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [
             (np.zeros(1, dtype=np.float32), 16000, "text 0 a"),
             (np.zeros(1, dtype=np.float32), 16000, "text 0 b"),
@@ -433,7 +441,7 @@ def test_a_split_source_is_not_re_split_on_every_restart(
 def test_resume_false_re_splits_a_source_it_already_consumed(tmp_path, monkeypatch):
     """The record of consumed sources is a resume artifact, so `resume=False`
     must not let a previous run's copy of it suppress work in this one."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
 
     monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
@@ -450,7 +458,7 @@ def test_the_recovered_count_survives_a_restart(tmp_path, monkeypatch):
     count, and the source is not re-split on the second run -- so a counter left
     out of the checkpoint would report zero recovered clips for any run that was
     ever resumed, which is every long one."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
 
     monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
@@ -466,7 +474,7 @@ def test_a_segment_keeps_its_provenance_when_normalisation_refuses(tmp_path, mon
     """The refusal path builds a fresh ClipResult, so the field has to be
     carried across by hand. The rejection log is where the yield of a repair is
     read off -- silently dropping it there understates what splitting cost."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
 
     monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)
@@ -503,7 +511,7 @@ def test_a_segment_is_measured_on_every_gate_during_calibration(tmp_path, monkey
     """calibrate.py's whole value is that every clip is scored by every gate.
     A segment stopped at its first failure biases the per-gate rates it feeds,
     silently, in the one mode whose output is used to move thresholds."""
-    def fake_split(audio, sr, text, *, aligner, speech_spans):
+    def fake_split(audio, sr, text, *, aligner, speech_spans, **_):
         return [(np.zeros(1, dtype=np.float32), 16000, "text 0 a")]
 
     monkeypatch.setattr("pipeline.processor.split_at_silence", fake_split)

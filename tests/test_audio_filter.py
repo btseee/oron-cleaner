@@ -62,7 +62,12 @@ def filt():
 
     def load(audio_input):
         f.calls.append("load")
-        return (audio_input, "") if audio_input is not None else (None, "decode_failed")
+        if audio_input is None:
+            return None, None, 0, "decode_failed"
+        # Same array for work and native at the working rate: these tests are
+        # about the gate sequence, not the resample. The rate-carrying path has
+        # its own test (`FFMPEG_FAKE_SR`) and the splitter has another.
+        return audio_input, audio_input, SAMPLE_RATE, ""
 
     def vad(audio):
         f.calls.append("vad")
@@ -91,7 +96,7 @@ def filt():
 
     from oron_tts.text import MongolianNormalizer
 
-    f._prepare_output_audio = lambda a: np.asarray(a, dtype=np.float32)
+    f._prepare_output_audio = lambda a, sr: np.asarray(a, dtype=np.float32)
     f._aligner = _Aligner()
     f._normalizer = MongolianNormalizer()
     return f
@@ -214,6 +219,10 @@ def test_unmeasurable_snr_is_not_a_rejection():
     )
 
 
+# A real source rate, deliberately not the 16 kHz working rate.
+FFMPEG_FAKE_SR = 48_000
+
+
 def test_a_path_torchaudio_cannot_decode_falls_back_to_ffmpeg(tmp_path, monkeypatch):
     """A missing codec must not read as an unusable corpus.
 
@@ -234,17 +243,60 @@ def test_a_path_torchaudio_cannot_decode_falls_back_to_ffmpeg(tmp_path, monkeypa
 
     def fake_ffmpeg(path):
         calls["ffmpeg"] += 1
-        return np.zeros(SAMPLE_RATE, dtype="float32"), SAMPLE_RATE
+        # One second at a rate ABOVE the working rate, so the assertions below
+        # distinguish "decoded at source rate then resampled once" from the old
+        # behaviour of decoding straight to 16 kHz.
+        return np.zeros(FFMPEG_FAKE_SR, dtype="float32"), FFMPEG_FAKE_SR
 
     import torchaudio
     monkeypatch.setattr(torchaudio, "load", refuse)
     monkeypatch.setattr(af, "_decode_with_ffmpeg", fake_ffmpeg)
 
     filt = af.AudioQualityFilter.__new__(af.AudioQualityFilter)
-    audio, err = af.AudioQualityFilter._load_audio(filt, tmp_path / "clip.mp3")
+    audio, native, native_sr, err = af.AudioQualityFilter._load_audio(
+        filt, tmp_path / "clip.mp3")
     assert err == "", f"fallback did not run: {err}"
     assert calls["ffmpeg"] == 1
     assert audio is not None and len(audio) == SAMPLE_RATE
+    # The fallback must hand back the source rate, not the working rate: pinning
+    # ffmpeg's -ar here is what capped every corpus at 8 kHz.
+    assert native_sr == FFMPEG_FAKE_SR
+    assert len(native) == FFMPEG_FAKE_SR
+
+
+def test_the_ffmpeg_fallback_does_not_pin_the_sample_rate(monkeypatch):
+    """The decoder must ask ffmpeg for the file's own rate, not the working one.
+
+    This asserts the argv, not a stub. The previous test for this path replaced
+    `_decode_with_ffmpeg` wholesale, so re-adding `-ar 16000` -- the bug that
+    capped `bandwidth_hz` at 8 kHz for every published corpus -- passed the
+    entire suite. A fake of the function under test cannot fail for it.
+    """
+    import io
+    import subprocess
+
+    import soundfile as sf
+
+    import pipeline.audio_filter as af
+
+    seen: dict = {}
+    buf = io.BytesIO()
+    sf.write(buf, np.zeros(FFMPEG_FAKE_SR, dtype="float32"), FFMPEG_FAKE_SR,
+             format="WAV", subtype="FLOAT")
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout=buf.getvalue(), stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    audio, sr = af._decode_with_ffmpeg("clip.mp3")
+
+    assert "-ar" not in seen["cmd"], (
+        f"ffmpeg is being pinned to a fixed rate: {seen['cmd']}. Everything "
+        "above that rate's Nyquist is destroyed before it can be measured."
+    )
+    assert sr == FFMPEG_FAKE_SR
+    assert len(audio) == FFMPEG_FAKE_SR
 
 
 # ── homoglyphs ────────────────────────────────────────────────────────────────

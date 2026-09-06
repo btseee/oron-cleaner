@@ -263,7 +263,7 @@ def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
     even on the speech-ratio failure path, so a clip rejected as mostly silence
     still corroborates its own cut points.
     """
-    audio, err = filt._load_audio(audio_input)
+    audio, native, native_sr, err = filt._load_audio(audio_input)
     if audio is None:
         return None
 
@@ -292,7 +292,8 @@ def _split_clip(filt: AudioQualityFilter, audio_input, ground_truth: str):
         (t["start"] / SAMPLE_RATE, t["end"] / SAMPLE_RATE) for t in timestamps
     ]
     return split_at_silence(
-        audio, SAMPLE_RATE, text, aligner=filt._aligner, speech_spans=speech_spans
+        audio, SAMPLE_RATE, text, aligner=filt._aligner, speech_spans=speech_spans,
+        cut_audio=native, cut_sr=native_sr,
     )
 
 

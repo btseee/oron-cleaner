@@ -87,11 +87,29 @@ MAX_DC_OFFSET: float = 0.01
 
 # ── Bandwidth ─────────────────────────────────────────────────────────────────
 # Highest frequency whose mean band power is within BANDWIDTH_DROP_DB of the
-# spectral peak. Measured corpus medians: Common Voice 7.1 kHz, FLEURS 7.7 kHz
-# (capped), MBSpeech 7.6 kHz (capped). No Mongolian source is full-band, so a
-# 10 kHz gate would discard 77% of the corpus; 7 kHz keeps 59% of Common Voice
-# and effectively all of FLEURS/MBSpeech.
-BANDWIDTH_DROP_DB: float = 40.0
+# spectral peak, measured on the NATIVE-rate signal.
+#
+# 50 dB, not 40: it is the Hi-Fi TTS / HiFiTTS-2 definition, so these numbers can
+# be compared against the published corpora everyone else calibrates against.
+#
+# Every corpus median recorded here before this change was an artifact. The
+# pipeline decoded to 16 kHz before measuring, so no clip could report above
+# 8 kHz and all three "measured medians" were the truncation, not the source.
+# Re-measured at native rate, n=120 per corpus, -50 dB:
+#
+#     Common Voice (raw mp3 @ 64k)   median 11,613 Hz   73% above 8 kHz
+#     WorldSpeech  (raw opus)        median 11,977 Hz  100% above 8 kHz
+#     FLEURS       (16 kHz native)   genuine 8 kHz ceiling
+#     MBSpeech     (published)       120/120 clips in one bin at the 8 kHz wall
+#
+# The floor stays at 6 kHz and is NOT yet recalibrated for the new definition.
+# It cannot be set from these numbers alone: Common Voice's high band is only
+# half speech-correlated at 64 kbps (HF speech/silence ratio 3.9 against
+# WorldSpeech's 28.8), so raising the gate would preferentially select the clips
+# carrying the most mp3 coding noise -- and this project trains on what it
+# keeps. Set it from a `--calibrate` pass over native-rate audio, with the
+# codec test alongside it.
+BANDWIDTH_DROP_DB: float = 50.0
 MIN_BANDWIDTH_HZ: float = 6_000.0
 
 # ── DNSMOS P.835 ──────────────────────────────────────────────────────────────
