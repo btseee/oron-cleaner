@@ -360,6 +360,12 @@ def _metadata(
     record: dict[str, Any] = {
         "snr_db":           float(result.snr_db),
         "bandwidth_hz":     float(result.bandwidth_hz),
+        # The rate the clip was decoded at. `bandwidth_hz` cannot be read
+        # without it: a measurement can never exceed that rate's Nyquist, and
+        # every corpus built before v4 was silently capped at 8 kHz because the
+        # decode was pinned to 16 kHz. Recording the rate is what makes the
+        # column falsifiable rather than merely a number.
+        "native_sr":        int(result.native_sr),
         "mean_f0_hz":       float(result.mean_f0_hz),
         "pitch_confidence": float(result.pitch_confidence),
         "dnsmos_sig":       float(result.dnsmos_sig),
