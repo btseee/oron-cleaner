@@ -43,3 +43,9 @@ def test_requirements_txt_covers_every_declared_dependency():
     declared = {re.split(r"[><=\[]", d)[0]
                 for d in proj["project"]["dependencies"]} - {"oron-tts"}
     assert not (declared - req), f"requirements.txt omits {sorted(declared - req)}"
+
+
+def test_the_readme_points_at_the_agent_brief():
+    """An agent that reads only README.md must still find the traps."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "AGENTS.md" in text, "README.md must link the agent brief"

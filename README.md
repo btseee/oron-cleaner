@@ -7,6 +7,10 @@ Sources are merged into **one** corpus rather than published separately, because
 the consumer is a single training run and the per-speaker cap and the
 speaker-disjoint split only make sense across the whole thing.
 
+> Changing anything here? Read **[AGENTS.md](AGENTS.md)** first. It lists the
+> four failure modes that do not raise, and the order-of-operations constraints
+> that look arbitrary until they break something downstream.
+
 | source | licence | raw hours | notes |
 |---|---|---|---|
 | Common Voice 26.0 `mn` | CC0-1.0 | ~40 h | `validated` only, after the down-vote gate |
