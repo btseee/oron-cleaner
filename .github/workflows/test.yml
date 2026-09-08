@@ -47,7 +47,7 @@ jobs:
           # pytest.importorskip.
           # pyyaml: the end-to-end test reads the training config through
           # preflight, which is the other half of the cross-repo contract.
-          pip install pytest ruff numpy soundfile pandas pyarrow librosa pyyaml
+          pip install pytest ruff numpy soundfile pandas pyarrow librosa soxr pyyaml
           pip install -e .oron-tts
 
       - name: Lint
