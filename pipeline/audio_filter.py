@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 
-import librosa
 import numpy as np
 import soxr
 from oron_tts.text import MongolianNormalizer

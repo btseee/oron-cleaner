@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Keep in step with .github/workflows/test.yml.
 CI_PROVIDES = {
     "pytest", "ruff", "numpy", "soundfile", "pandas", "pyarrow", "librosa",
-    "yaml", "oron_tts",
+    "soxr", "yaml", "oron_tts",
     # The workflow checks out oron-tts beside this repo and the end-to-end test
     # puts its scripts/ on sys.path, so these resolve there.
     "build_f5_dataset", "preflight", "compute_epochs",

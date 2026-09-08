@@ -1,8 +1,15 @@
 # Working in oron-cleaner
 
 Builds the strict Mongolian speech corpora that `oron-tts` trains on. Input is
-Common Voice, FLEURS, MBSpeech and WorldSpeech; output is a corpus directory
-plus a manifest, published to HuggingFace under `btsee/`.
+Common Voice, FLEURS and MBSpeech — all three commercially usable; output is a
+corpus directory plus a manifest, published to HuggingFace under `btsee/`.
+
+**WorldSpeech is not an ordinary fourth input.** It is CC-BY-NC-4.0, excluded
+from `--datasets all`, and requires both `--datasets ws` and
+`--allow-non-commercial` to include. This has already shipped wrong once: a
+published model card carried `license: cc-by-nc-4.0` inherited from
+WorldSpeech even though WorldSpeech had failed the pass-rate gate and was never
+trained on.
 
 The consumer is a separate repository, `oron-tts`. Read its `AGENTS.md` too if
 you are touching anything that reaches the model.
@@ -13,7 +20,9 @@ you are touching anything that reaches the model.
 training reads are one string.** That is why the normaliser refuses
 constructions it cannot expand rather than guessing — a wrong expansion is
 published, scored, and learned, and the CER gate cannot catch it because the
-reference *is* the corrupted string.
+reference *is* the corrupted string. The normaliser itself lives in the sibling
+repo: `pipeline/audio_filter.py` imports `MongolianNormalizer` from
+`oron_tts.text`.
 
 ## Four things that fail silently
 
@@ -25,18 +34,21 @@ are now written per row. If `native_sr` is absent, the corpus predates the fix
 and its bandwidth column is the truncation.
 
 **2. `FILTER_POLICY_VERSION` hashes every uppercase scalar in
-`pipeline/constants.py`.** Change a threshold and the version changes, which is
-what stops two corpora built under different rules from being pooled. It is
-recorded once per corpus in `provenance.json` — *not* on manifest rows.
-oron-tts's `build_f5_dataset.py` reads it from there and refuses a mismatch.
+`pipeline/constants.py`, except `OUTPUT_DIR` and the version itself.** Change a
+threshold and the version changes, which is what stops two corpora built under
+different rules from being pooled. It is recorded once per corpus in
+`provenance.json` — *not* on manifest rows. oron-tts's `build_f5_dataset.py`
+reads it from there and refuses a mismatch — but only when it can import
+`pipeline.constants` at all. On a training pod with `oron-tts` but not
+`oron-cleaner` installed, that check is a silent no-op, not a refusal.
 
 **3. The pipeline is single-threaded on purpose.** One MMS_FA alignment of a
 6 s clip costs 0.07 s on **one thread** and 0.84 s on forty-eight — short
-sequences, so synchronisation dominates. `TORCH_THREADS = 1` and the
-`OMP_NUM_THREADS=1` exports are deliberate; "fixing" them made a pass twelve
-times slower. The consequence is that a full Common Voice pass (~30k clips)
-runs for days on one core. Sharding clips across worker processes is the
-prerequisite for any full corpus rebuild.
+sequences, so synchronisation dominates. `TORCH_THREADS = 1`
+(`pipeline/constants.py`) is deliberate; "fixing" it made a pass twelve times
+slower. The consequence is that a full Common Voice pass (~30k clips) runs for
+days on one core. Sharding clips across worker processes is the prerequisite
+for any full corpus rebuild.
 
 **4. `pip install -e .` does not work on a clean machine.** `pyproject.toml`
 lists `oron-tts` as a dependency and oron-tts is not on PyPI — it is installed
@@ -45,6 +57,14 @@ index and fails. Install from `requirements.txt`, which omits `oron-tts`,
 mirrors the rest of pyproject, and is asserted not to drift behind it. That file
 was empty once, which made `pip install -r` a silent no-op and cost three pod
 runs, each dying on a different missing import.
+
+There is a third file, `requirements.lock`: the pinned transitive closure of
+`pyproject.toml`'s dependencies, gated by `scripts/check_lockfile.py`. Every
+dependency in `pyproject.toml` was declared `>=` with no ceiling, so an
+upstream `transformers`, `torch` or `datasets` release could silently change
+what the filter gates measure with no signal. Adding a dependency correctly
+means touching all three files: `pyproject.toml`, `requirements.txt`, and
+`requirements.lock`.
 
 ## Order of operations that matters
 
@@ -61,7 +81,10 @@ runs, each dying on a different missing import.
 ## How to run things
 
 ```bash
-python -m pytest tests/ -q                     # 286 passing, 2 skipped
+ruff check .                                    # CI gate
+python scripts/check_ci_imports.py              # CI gate: no test may reach torch at import time
+python scripts/check_lockfile.py                # CI gate: requirements.lock covers pyproject.toml
+python -m pytest tests/ -q                      # 290 passing, 2 skipped
 python clean_pipeline.py --datasets cv --calibrate --limit 300 \
     --corpus-dir <dir> --no-upload             # tune thresholds first
 python clean_pipeline.py --datasets cv --corpus-dir <dir> --no-upload
