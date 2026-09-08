@@ -2,12 +2,16 @@
 #
 # This file existed as an empty placeholder, so `pip install -r requirements.txt`
 # was a silent no-op -- every pod bootstrap "installed" nothing and each missing
-# package surfaced later as a crash mid-run. pyproject cannot stand in for it on
-# a deployment target, because it declares requires-python >= 3.14 and the CUDA
-# images ship 3.12; `pip install -e .` refuses there before it reads a single
-# dependency.
+# package surfaced later as a crash mid-run.
 #
-# oron-tts is deliberately absent: install it from its own checkout first.
+# It is not redundant with pyproject. `pip install -e .` resolves the declared
+# `oron-tts` dependency from an index, and oron-tts is not published to PyPI --
+# it is installed from its own checkout. So the editable install fails on a
+# clean machine while this file, which omits it, succeeds.
+#
+# An earlier version of this comment blamed a `requires-python >= 3.14` floor.
+# That was wrong: the floor is and has always been >= 3.12, which the CUDA
+# images satisfy. The claim came from a review rather than from the file.
 torch>=2.6.0
 torchaudio>=2.6.0
 torchmetrics[audio]>=1.9.0
